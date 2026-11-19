@@ -1,0 +1,81 @@
+"""Steps 2c / 2d / 2f: vias in pads.
+ --ground   one via in every surface-mount ground pad (down to the ground planes)
+ --supply   one via per top-layer piece of each supply or bias net; decoupling caps always get their own
+ --testpoints  one via in every test-point pad that is not yet connected on its own layer
+Never puts a via in the hand-swap resistors (board.NO_VIA_REFS) or in through-hole pads (they already reach every layer).
+Via size: 0.6/0.3 where the pad is at least 0.9 mm in both directions, otherwise 0.5/0.3 (0.1 mm ring, the project minimum).
+A via is placed at the pad centre; if that breaks a clearance it is slid along the pad's long axis; if nothing fits it is reported, not forced.
+usage: drops.py IN OUT [--ground] [--supply] [--testpoints] [--json OUT.json]"""
+import sys, json, math, argparse
+from shapely.geometry import Point
+from shapely.strtree import STRtree
+import board as bd, toplink as tl
+BIG = (0.6, 0.3); SMALL = (0.5, 0.3); HOLE_GAP = 0.25
+
+def via_size(p): return BIG if min(p['w'], p['h']) >= 0.9 else SMALL
+
+class Placer:
+    def __init__(self, B):
+        self.B = B; self.refresh()
+    def refresh(self):
+        B = self.B; self.cu = []
+        for l in B.copper_layers: self.cu += [(n, g) for n, g, k, o in B.copper(l)]
+        self.tree = STRtree([g for _, g in self.cu])
+        self.holes = [(v['x'], v['y'], v['drill']) for v in B.vias] + [(p['x'], p['y'], p['drill']) for p in B.pads if p['drill']]
+    def legal(self, x, y, size, drill, net):
+        g = Point(x, y).buffer(size / 2, 16)
+        for j in self.tree.query(g.buffer(bd.CLEAR_HZ + 0.01)):
+            n, h = self.cu[int(j)]
+            if n != net and g.distance(h) < bd.clearance(net, n) - 1e-6: return False
+        return all(math.dist((x, y), h[:2]) - drill / 2 - h[2] / 2 >= HOLE_GAP - 1e-6 for h in self.holes)
+    def spot(self, p):
+        size, drill = via_size(p); horiz = p['w'] >= p['h']; reach = max(abs(p['w'] - p['h']) / 2, 0)
+        for k in range(0, int(reach / 0.05) + 1):
+            for s in ((0,) if k == 0 else (1, -1)):
+                x = p['x'] + (s * k * 0.05 if horiz else 0); y = p['y'] + (0 if horiz else s * k * 0.05)
+                if self.legal(x, y, size, drill, p['net']): return x, y, size, drill
+        if (size, drill) != SMALL and self.legal(p['x'], p['y'], *SMALL, p['net']): return p['x'], p['y'], *SMALL
+        return None
+
+def has_via(B, p):
+    g = B.pad_geom(p); return any(v['net'] == p['net'] and g.contains(Point(v['x'], v['y'])) for v in B.vias)
+def smd_top(p): return p['kind'] == 'smd' and p['layers'] == {'F.Cu'}
+
+def run(B, ground=False, supply=False, testpoints=False, log=print):
+    P = Placer(B); added = []; failed = []
+    def drop(p, why):
+        if p['ref'] in bd.NO_VIA_REFS or has_via(B, p): return False
+        s = P.spot(p)
+        if not s: failed.append(dict(pad=f"{p['ref']}.{p['num']}", net=p['net'], why=why)); return False
+        B.add([B.via_text(*s, p['net'])]); P.refresh(); added.append(dict(pad=f"{p['ref']}.{p['num']}", net=p['net'], at=[round(s[0], 3), round(s[1], 3)], size=s[2], why=why)); return True
+    if ground:
+        for p in list(B.pads):
+            if p['net'] in bd.GROUND and smd_top(p) and not p['ref'].startswith('TP'): drop(p, 'ground')
+    if supply:
+        import via_justify
+        for net in [n for n in B.nets if bd.is_supply(n)]:
+            for c in tl.components(B, net):
+                if any(q['drill'] for q in c['pads']): continue                       # a through-hole pad already reaches the layer
+                pads = [q for q in c['pads'] if smd_top(q) and q['ref'] not in bd.NO_VIA_REFS]
+                for q in pads:
+                    if via_justify.is_decap(B, q): drop(q, 'decoupling cap')
+                if c['vias'] or any(has_via(B, q) for q in pads): continue
+                order = sorted(pads, key=lambda q: (q['ref'][0] == 'U', -min(q['w'], q['h'])))   # passives before IC pins, bigger pads first
+                if not any(drop(q, 'supply piece') for q in order) and pads:
+                    failed.append(dict(pad='+'.join(f"{q['ref']}.{q['num']}" for q in pads), net=net, why='no legal via anywhere in this piece'))
+    if testpoints:
+        for p in list(B.pads):
+            if p['ref'].startswith('TP') and p['net'] and p['net'] not in bd.GROUND: drop(p, 'test point')
+    for a in added: log(f"via {a['pad']:<10} {a['net']:<20} {a['size']} ({a['why']})")
+    for f in failed: log(f"NO ROOM {f['pad']} {f['net']} ({f['why']})")
+    return added, failed
+
+if __name__ == '__main__':
+    ap = argparse.ArgumentParser(); ap.add_argument('inp'); ap.add_argument('out')
+    for k in ('ground', 'supply', 'testpoints'): ap.add_argument('--' + k, action='store_true')
+    ap.add_argument('--json'); a = ap.parse_args(); B = bd.Board(a.inp)
+    added, failed = run(B, a.ground, a.supply, a.testpoints, log=lambda *_: None)
+    print(len(added), 'vias added;', len(failed), 'could not be placed'); [print('  NO ROOM', f) for f in failed]
+    B.save(a.out, crlf=False)
+    if a.json: json.dump(dict(added=added, failed=failed), open(a.json, 'w'), indent=1)
+    sys.exit(1 if failed else 0)
