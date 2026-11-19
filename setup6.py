@@ -1,5 +1,6 @@
 """Step 1: turn the 4-layer board into the 6-layer starting point.
  - adds In3.Cu / In4.Cu, sets JLC's default 6-layer 1.6 mm stackup
+ - sets the board's via defaults to filled and capped: the drops put vias in pads (rule 7), and the fab output must say so
  - ground zones on In1 (L2), In3 (L4), In4 (L5, lowest priority under the power copper) and B.Cu (L6); the old In2 zone goes (L3 = hops)
  - rips all tracks and vias, except top-only routing of the nets named in --keep that is still fully connected and legal
 usage: setup6.py IN OUT [--keep GA GB GA_M GB_M VB]"""
@@ -44,6 +45,7 @@ def block(text, start):
 def convert(text):
     if '"In3.Cu"' not in text.split('(setup')[0]:
         text = text.replace('\t\t(6 "In2.Cu" signal)\n', '\t\t(6 "In2.Cu" signal)\n\t\t(8 "In3.Cu" signal)\n\t\t(10 "In4.Cu" signal)\n', 1)
+    for tok in ('capping', 'filling'): text = text.replace(f'\t\t({tok} no)\n', f'\t\t({tok} yes)\n', 1)
     s = text.index('\t\t(stackup'); e = block(text, s + 2)
     text = text[:s] + STACK + text[e + 1:]
     zones = {}
@@ -81,4 +83,4 @@ if __name__ == '__main__':
     if bad: B.remove([s['uuid'] for s in B.segs if s['net'] in bad])
     print('layers', B.copper_layers, '| zones', [(z['name'], z['layers']) for z in B.zones])
     print('kept routing:', sorted(keep - bad), '| ripped because broken or illegal:', sorted(bad & keep), '| tracks left', len(B.segs))
-    B.save(a.out, crlf=False)
+    B.save(a.out)

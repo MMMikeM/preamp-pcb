@@ -4,13 +4,13 @@ Flag when a legal top-layer path exists with length <= max(RATIO * gap, gap + EX
 usage: via_justify.py BOARD [--json OUT] [--max-gap 8] [--include-gnd] [--include-decaps]"""
 import sys, json, math, argparse, itertools
 import board as bd, toplink as tl
-RATIO = 1.5; EXTRA = 3.0
+RATIO = 1.5; EXTRA = 3.0; MAX_GAP = 8.0
 
 def is_decap(B, pad):
     nets = {p['net'] for p in B.fps[pad['ref']]['pads']}
     return pad['ref'].startswith('C') and 'GND' in nets and nets & (bd.RAILS | bd.BIAS)
 
-def check(B, max_gap=8.0, include_gnd=False, include_decaps=False, nets=None, width=0.2):
+def check(B, max_gap=MAX_GAP, include_gnd=False, include_decaps=False, nets=None, width=0.2):
     flags = []
     for net in (nets or B.nets):
         if net in bd.GROUND and not include_gnd: continue
@@ -39,7 +39,7 @@ def check(B, max_gap=8.0, include_gnd=False, include_decaps=False, nets=None, wi
     return flags
 
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser(); ap.add_argument('board'); ap.add_argument('--json'); ap.add_argument('--max-gap', type=float, default=8.0)
+    ap = argparse.ArgumentParser(); ap.add_argument('board'); ap.add_argument('--json'); ap.add_argument('--max-gap', type=float, default=MAX_GAP)
     ap.add_argument('--include-gnd', action='store_true'); ap.add_argument('--include-decaps', action='store_true'); ap.add_argument('--nets', nargs='*')
     a = ap.parse_args(); B = bd.Board(a.board)
     fl = check(B, a.max_gap, a.include_gnd, a.include_decaps, a.nets)

@@ -1,6 +1,7 @@
 """Minimal KiCad .kicad_pcb reader/writer for the route6 scripts. Coordinates are KiCad's own (mm, y down).
 Only what the routing steps need: pads, tracks, vias, zones (names only) and text-level insert/remove of tracks and vias."""
 import re, math, uuid as _uuid
+import numpy as np
 from shapely.geometry import Point, LineString, box
 from shapely import affinity
 
@@ -27,6 +28,12 @@ def is_supply(net): return net in RAILS or net in BIAS or 'BAT' in net
 NO_VIA_REFS = {'R109', 'R117', 'R209', 'R217'}          # hand-swapped parts: no via in their pads
 LAYERS6 = ['F.Cu', 'In1.Cu', 'In2.Cu', 'In3.Cu', 'In4.Cu', 'B.Cu']   # L1..L6
 CLEAR = 0.2; CLEAR_HZ = 0.4
+EDGE = 0.5                                              # copper to board edge
+HOLE_GAP = 0.25                                         # drill edge to drill edge
+TOL = 1e-3                                              # the checks report a breach only beyond this
+def edge_room(outline, x, y, half):
+    """distance from the board edge to copper of half-width `half` centred on x, y (numbers or arrays)"""
+    x0, y0, x1, y1 = outline; return np.minimum.reduce([x - x0, x1 - x, y - y0, y1 - y]) - half
 def clearance(a, b): return CLEAR_HZ if (is_hz(a) or is_hz(b)) else CLEAR
 
 def rot(x, y, r):
@@ -35,10 +42,14 @@ def rot(x, y, r):
 
 class Board:
     def __init__(self, path):
-        self.path = path; self.text = open(path, encoding='utf-8').read().replace('\r', '')
+        raw = open(path, encoding='utf-8', newline='').read()
+        self.path = path; self.crlf = '\r\n' in raw; self.text = raw.replace('\r', '')
         self._parse()
     def _parse(self):
         B = parse(self.text); self.pads = []; self.fps = {}; self.segs = []; self.vias = []; self.zones = []
+        self._outline = None; self._copper = {}
+        arcs = len(find(B, 'arc'))
+        if arcs: raise ValueError(f'{self.path}: {arcs} arc tracks. route6 reads straight tracks only, so it could neither check nor rip them; straighten them in KiCad first.')
         for fp in find(B, 'footprint'):
             at = first(fp, 'at'); fx, fy = float(at[1]), float(at[2]); fr = float(at[3]) if len(at) > 3 else 0.0
             ref = next(p[2] for p in find(fp, 'property') if p[1] == 'Reference')
@@ -46,7 +57,8 @@ class Board:
             self.fps[ref] = dict(ref=ref, val=val, x=fx, y=fy, r=fr, layer=first(fp, 'layer')[1], pads=[])
             for p in find(fp, 'pad'):
                 pa = first(p, 'at'); dx, dy = rot(float(pa[1]), float(pa[2]), fr)
-                sz = first(p, 'size'); n = first(p, 'net'); pr = float(pa[3]) if len(pa) > 3 else fr
+                # the file stores a pad's angle as absolute (footprint rotation included), so a missing angle means 0
+                sz = first(p, 'size'); n = first(p, 'net'); pr = float(pa[3]) if len(pa) > 3 else 0.0
                 w, h = float(sz[1]), float(sz[2])
                 if round(pr / 90) % 2: w, h = h, w
                 d = first(p, 'drill'); lay = first(p, 'layers')[1:]
@@ -85,12 +97,14 @@ class Board:
     @staticmethod
     def via_geom(v): return Point(v['x'], v['y']).buffer(v['size'] / 2, 16)
     def copper(self, layer):
-        """[(net, geom, kind, obj)] of all copper on one layer (zones excluded)"""
+        """[(net, geom, kind, obj)] of all copper on one layer (zones excluded). Shared until the next edit: do not change the list."""
+        if layer in self._copper: return self._copper[layer]
         out = [(p['net'], self.pad_geom(p), 'pad', p) for p in self.pads if layer in p['layers']]
         out += [(s['net'], self.seg_geom(s), 'seg', s) for s in self.segs if s['layer'] == layer]
         out += [(v['net'], self.via_geom(v), 'via', v) for v in self.vias]
-        return out
+        self._copper[layer] = out; return out
     def outline(self):
+        if self._outline: return self._outline
         xs = []; ys = []
         for m in re.finditer(r'\(gr_(?:line|arc|rect)[^()]*(?:\([^()]*\)[^()]*)*?\(layer "Edge.Cuts"\)', self.text): pass
         B = parse(self.text)
@@ -100,7 +114,7 @@ class Board:
                 for q in ('start', 'end', 'mid'):
                     a = first(g, q)
                     if a: xs.append(float(a[1])); ys.append(float(a[2]))
-        return min(xs), min(ys), max(xs), max(ys)
+        self._outline = (min(xs), min(ys), max(xs), max(ys)); return self._outline
     # ---- text-level edits (keeps everything else in the file byte-identical)
     @staticmethod
     def _f(v): return ('%.4f' % v).rstrip('0').rstrip('.')
@@ -131,7 +145,5 @@ class Board:
         out.append(self.text[pos:]); self.text = ''.join(out); self._parse(); return n
     def save(self, path=None, crlf=None):
         path = path or self.path
-        if crlf is None:
-            try: crlf = b'\r\n' in open(self.path, 'rb').read(4096)
-            except OSError: crlf = False
+        if crlf is None: crlf = self.crlf
         with open(path, 'w', encoding='utf-8', newline='') as fh: fh.write(self.text.replace('\n', '\r\n') if crlf else self.text)

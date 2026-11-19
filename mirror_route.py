@@ -2,9 +2,12 @@
 For every net that only touches source-channel parts (X1nn, plus its test points and wire pads), find how its pads map to the
 twin parts (X2nn): mirrored about the board centre, or shifted by SHIFT mm. If every pad of the net maps the same way,
 its tracks and vias are transformed the same way and written on the twin net (whatever was on the twin net is removed first).
+A net with no routing of its own is not copied, and neither is one whose copy would crowd copper that is staying (a supply
+track, a net left for individual routing, an earlier copy made with the other mapping). Its twin then keeps whatever it has.
 Nets that mix both mappings, or touch shared parts (3xx, U5, U6), are listed and left for individual routing.
 usage: mirror_route.py IN OUT [--from 1] [--dry-run] [--json OUT.json]"""
-import sys, re, json, argparse
+import sys, re, json, math, argparse
+from shapely.strtree import STRtree
 import board as bd
 SHIFT = 19.45; TOL = 0.03
 
@@ -42,16 +45,48 @@ def plan(B, src='1'):
         else: skipped.append(dict(net=net, why='its pads have no consistent mirrored or shifted twins'))
     return todo, skipped, T
 
+def waits_for_copy(B, src='1'):
+    """Nets to leave unrouted until the copy is made: the twins it will fill, and the other channel's own nets, which the
+    copy has to fit around if they are routed first."""
+    wait = {t['twin'] for t in plan(B, src)[0]}; refs = {}
+    for p in B.pads:
+        if p['net'] and not p['ref'].startswith('TP'): refs.setdefault(p['net'], []).append(p['ref'])
+    for net, rs in refs.items():
+        if net not in bd.GROUND and not bd.is_supply(net) and any(is_dst(r, src) for r in rs) and not any(is_src(r, src) for r in rs): wait.add(net)
+    return wait
+
+def blocker(B, twin, segs, vias):
+    """what a copy onto the twin net would crowd, or None; the twin's present routing does not count, it is replaced"""
+    outline = B.outline()
+    if any(bd.edge_room(outline, x, y, half) < bd.EDGE - bd.TOL for x, y, half in
+           [(s[a], s[b], s['w'] / 2) for s in segs for a, b in (('x1', 'y1'), ('x2', 'y2'))] + [(v['x'], v['y'], v['size'] / 2) for v in vias]): return 'the board edge'
+    holes = [(v['x'], v['y'], v['drill']) for v in B.vias if v['net'] != twin] + [(p['x'], p['y'], p['drill']) for p in B.pads if p['drill']]
+    if any(math.dist((v['x'], v['y']), h[:2]) - v['drill'] / 2 - h[2] / 2 < bd.HOLE_GAP - bd.TOL for v in vias for h in holes): return 'a hole'
+    for layer in B.copper_layers:
+        new = [B.seg_geom(s) for s in segs if s['layer'] == layer] + [B.via_geom(v) for v in vias]
+        if not new: continue
+        staying = [(n, g) for n, g, k, o in B.copper(layer) if n != twin]; tree = STRtree([g for _, g in staying])
+        for g in new:
+            for j in tree.query(g.buffer(bd.CLEAR_HZ + 0.01)):
+                n, h = staying[int(j)]
+                if g.distance(h) < bd.clearance(twin, n) - bd.TOL: return n or 'unconnected copper'
+
 def run(B, src='1', dry=False):
-    todo, skipped, T = plan(B, src); new = []; rm = []
-    for t in todo:
+    planned, skipped, T = plan(B, src); todo = []
+    for t in planned:
         f = T[t['mode']]
-        rm += [s['uuid'] for s in B.segs if s['net'] == t['twin']] + [v['uuid'] for v in B.vias if v['net'] == t['twin']]
-        for s in B.segs:
-            if s['net'] == t['net']: new.append(B.seg_text(f(s['x1']), s['y1'], f(s['x2']), s['y2'], s['w'], s['layer'], t['twin']))
-        for v in B.vias:
-            if v['net'] == t['net']: new.append(B.via_text(f(v['x']), v['y'], v['size'], v['drill'], t['twin']))
-    if not dry: B.remove(rm); B.add(new)
+        segs = [dict(s, x1=f(s['x1']), x2=f(s['x2'])) for s in B.segs if s['net'] == t['net']]
+        vias = [dict(v, x=f(v['x'])) for v in B.vias if v['net'] == t['net']]
+        if not segs and not vias:
+            skipped.append(dict(net=t['net'], why='it has no routing to copy, so its twin is left as it is')); continue
+        hit = blocker(B, t['twin'], segs, vias)
+        if hit:
+            skipped.append(dict(net=t['net'], why=f"its copy would crowd {hit}, so its twin {t['twin']} is left as it is")); continue
+        todo.append(t)
+        if dry: continue
+        B.remove([x['uuid'] for x in B.segs + B.vias if x['net'] == t['twin']])
+        B.add([B.seg_text(s['x1'], s['y1'], s['x2'], s['y2'], s['w'], s['layer'], t['twin']) for s in segs] +
+              [B.via_text(v['x'], v['y'], v['size'], v['drill'], t['twin']) for v in vias])
     return todo, skipped
 
 if __name__ == '__main__':
@@ -60,14 +95,16 @@ if __name__ == '__main__':
     todo, skipped = run(B, a.src, a.dry_run)
     print(len(todo), 'nets copied:', {m: sum(t['mode'] == m for t in todo) for m in ('mirror', 'copy')})
     for s in skipped: print('  left for individual routing:', s['net'], '-', s['why'])
+    if a.json: json.dump(dict(copied=todo, skipped=skipped), open(a.json, 'w'), indent=1)
     if not a.dry_run:
         import checks
-        pieces = lambda nets: {u['net']: u['pieces'] for u in checks.unconnected(B, nets)}
-        ps = pieces([t['net'] for t in todo]); pt = pieces([t['twin'] for t in todo])
-        diff = [(t['net'], ps.get(t['net'], 1), t['twin'], pt.get(t['twin'], 1)) for t in todo if ps.get(t['net'], 1) != pt.get(t['twin'], 1)]
-        twins = {t['twin'] for t in todo}; cl = [c for c in checks.clearances(B) if c['a_net'] in twins or c['b_net'] in twins]
+        diff = []; cl = []
+        if todo:                                          # checks.unconnected treats an empty list as every net
+            pieces = lambda nets: {u['net']: u['pieces'] for u in checks.unconnected(B, nets)}
+            ps = pieces([t['net'] for t in todo]); pt = pieces([t['twin'] for t in todo])
+            diff = [(t['net'], ps.get(t['net'], 1), t['twin'], pt.get(t['twin'], 1)) for t in todo if ps.get(t['net'], 1) != pt.get(t['twin'], 1)]
+            twins = {t['twin'] for t in todo}; cl = [c for c in checks.clearances(B) if c['a_net'] in twins or c['b_net'] in twins]
         print('after copy: twin nets whose connectivity differs from the source', len(diff), '| clearance problems', len(cl))
         for x in (diff + cl)[:10]: print('   ', x)
-        B.save(a.out, crlf=False)
+        B.save(a.out)
         if diff or cl: sys.exit(1)
-    if a.json: json.dump(dict(copied=todo, skipped=skipped), open(a.json, 'w'), indent=1)
