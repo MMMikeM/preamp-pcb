@@ -105,6 +105,24 @@ via and are then flagged by `via_justify`. With `ROUTER_DIR` set, every step als
    first pass of 2e and 2i); a quarter is `via_justify` run in full after every step, where most flags are nets not routed yet.
 10. **Fill and cap is board-wide.** Every via, not only those in pads, is marked filled and capped. Not yet opened in KiCad.
 
+## What duplicates KiCadRoutingTools
+route6 was written without looking at what the router's own toolkit already had. These parts re-implement it. Three of the bugs
+fixed in review (pad angle, the edge rule, the bounding-box outline) were in this duplicated code, which theirs gets right.
+
+| route6 | Their equivalent | Why ours is still here | What would remove it |
+|---|---|---|---|
+| `board.py` reading pads, tracks, vias, zones | `kicad_parser.py` (rotated and custom pads, real outline with cut-outs) | Theirs parses a file only, not text; has no removal by uuid; its writer alters other parts of the file; and we need shapely shapes either way | Parse with theirs behind an adapter and keep only our text-level `add`, `remove`, `save` |
+| `checks.clearances`, `holes`, `edge` | `check_drc.run_drc` (22 checks, net-class clearances, real outline) | Ours run on a board in memory, in tests and inside steps; theirs needs a saved file | Save to a temporary file wherever a check is needed (0.2 to 0.4 s a call) and delete ours |
+| `checks.unconnected` and the pad groups behind it | `check_connected.py` | Same reason, and the test-point helpers need groups of pads, which theirs reports only by coordinate | The same adapter, plus matching its result back to pads |
+| The search inside `toplink.top_path` | The compiled `GridRouter` (single-layer search, soft keep-away) | Theirs has no length cap and does not return the shortest path by default | A wrapper that sets its heuristic weight to 1.0 and applies our cap; this is also the fix for step 2b and `via_justify` being slow |
+| `stage_route.py` | `run_plan.py`, `autoroute.py` | Theirs cannot run our scripts as steps and writes no check report per step | Nothing short of contributing that upstream |
+| The rip-up in `setup6.py` | `route.py --undo` with `!net` exclusions | Theirs has no "keep only if still connected and legal" filter | Use theirs and re-check the kept nets ourselves |
+| `drops.py` | Plane taps in `plane_pad_tap.py` | Different rule: theirs lets pads share a via; rules 4 to 6 want one per pad and none in named parts | Not a duplicate in practice |
+
+Not duplicated, as far as a search of their code and docs found: `via_justify.py`, `neighbour_links.py` (their router joins a net's
+short gaps last), `mirror_route.py` (their replicate moves parts, not routing) and the 4-to-6-layer conversion.
+Since `krt_checks.py`, every step runs their DRC and connectivity check next to ours, so a disagreement between the two is visible.
+
 ## Not in this folder
 The router (KiCadRoutingTools, MIT, https://github.com/drandyhaas/KiCadRoutingTools; point `ROUTER_DIR` at a checkout) and the older 4-layer helpers in `../mike` (detour check, clean-up passes,
 island check). Those older helpers assume two routing layers and are not used by these steps.
