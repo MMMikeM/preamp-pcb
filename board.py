@@ -17,6 +17,8 @@ def parse(text):
 def find(node, key): return [c for c in node if isinstance(c, list) and c and c[0] == key]
 def first(node, key):
     r = find(node, key); return r[0] if r else None
+def is_locked(node):
+    l = first(node, 'locked'); return 'locked' in node or (l is not None and (len(l) == 1 or l[1] in ('yes', 'true')))
 
 # ---------------------------------------------------------------- project rules
 HZ_SUFFIX = ('GA', 'GB', 'GA_M', 'GB_M', 'VB', 'SVN', 'SVP', 'SVN_I', 'SVP_I', 'SVN_R', 'SVP_R')
@@ -35,6 +37,16 @@ def edge_room(outline, x, y, half):
     """distance from the board edge to copper of half-width `half` centred on x, y (numbers or arrays)"""
     x0, y0, x1, y1 = outline; return np.minimum.reduce([x - x0, x1 - x, y - y0, y1 - y]) - half
 def clearance(a, b): return CLEAR_HZ if (is_hz(a) or is_hz(b)) else CLEAR
+
+def channel_shift(B, tol=0.02):
+    """How far the second channel's parts (X2nn) sit to the right of their first-channel twins (X1nn), read from the placement:
+    the commonest offset among twins that are level with each other and not mirrored about the board centre. None if there is none."""
+    x0, _, x1, _ = B.outline(); cx = (x0 + x1) / 2; seen = {}
+    for r, f in B.fps.items():
+        m = re.match(r'([A-Z]+)1(\d\d)$', r); t = B.fps.get(f'{m.group(1)}2{m.group(2)}') if m and not r.startswith('TP') else None
+        if not t or abs(f['y'] - t['y']) > tol or abs(2 * cx - f['x'] - t['x']) < tol: continue
+        d = round(t['x'] - f['x'], 2); seen[d] = seen.get(d, 0) + 1
+    return max(seen, key=seen.get) if seen else None
 
 def rot(x, y, r):
     t = math.radians(r); c, s = math.cos(t), math.sin(t)
@@ -72,14 +84,17 @@ class Board:
         for s in find(B, 'segment'):
             a, b = first(s, 'start'), first(s, 'end')
             self.segs.append(dict(x1=float(a[1]), y1=float(a[2]), x2=float(b[1]), y2=float(b[2]), w=float(first(s, 'width')[1]),
-                                  layer=first(s, 'layer')[1], net=first(s, 'net')[-1], uuid=first(s, 'uuid')[1]))
+                                  layer=first(s, 'layer')[1], net=first(s, 'net')[-1], uuid=first(s, 'uuid')[1], locked=is_locked(s)))
         for v in find(B, 'via'):
             a = first(v, 'at')
             self.vias.append(dict(x=float(a[1]), y=float(a[2]), size=float(first(v, 'size')[1]), drill=float(first(v, 'drill')[1]),
-                                  net=first(v, 'net')[-1], uuid=first(v, 'uuid')[1]))
+                                  net=first(v, 'net')[-1], uuid=first(v, 'uuid')[1], locked=is_locked(v)))
         for z in find(B, 'zone'):
             nm = first(z, 'name'); l = first(z, 'layer') or first(z, 'layers')
-            self.zones.append(dict(net=first(z, 'net')[-1], name=nm[1] if nm else '', layers=l[1:]))
+            poly = first(z, 'polygon'); cp = first(z, 'connect_pads'); cl = first(cp, 'clearance') if cp else None; mt = first(z, 'min_thickness')
+            self.zones.append(dict(net=first(z, 'net')[-1], name=nm[1] if nm else '', layers=l[1:],
+                                   pts=[(float(q[1]), float(q[2])) for q in find(first(poly, 'pts'), 'xy')] if poly else [],
+                                   clearance=float(cl[1]) if cl else 0.0, min_thickness=float(mt[1]) if mt else 0.0))
         self.copper_layers = [l[1] for l in first(B, 'layers')[1:] if l[1].endswith('.Cu')]
         self.nets = sorted({p['net'] for p in self.pads if p['net']})
     # ---- geometry
@@ -118,18 +133,18 @@ class Board:
     # ---- text-level edits (keeps everything else in the file byte-identical)
     @staticmethod
     def _f(v): return ('%.4f' % v).rstrip('0').rstrip('.')
-    def seg_text(self, x1, y1, x2, y2, w, layer, net):
+    def seg_text(self, x1, y1, x2, y2, w, layer, net, uuid=None):
         f = self._f
         return (f'\t(segment\n\t\t(start {f(x1)} {f(y1)})\n\t\t(end {f(x2)} {f(y2)})\n\t\t(width {f(w)})\n\t\t(layer "{layer}")\n'
-                f'\t\t(net "{net}")\n\t\t(uuid "{_uuid.uuid4()}")\n\t)\n')
-    def via_text(self, x, y, size, drill, net, layers=('F.Cu', 'B.Cu')):
+                f'\t\t(net "{net}")\n\t\t(uuid "{uuid or _uuid.uuid4()}")\n\t)\n')
+    def via_text(self, x, y, size, drill, net, layers=('F.Cu', 'B.Cu'), uuid=None):
         f = self._f
         return (f'\t(via\n\t\t(at {f(x)} {f(y)})\n\t\t(size {f(size)})\n\t\t(drill {f(drill)})\n\t\t(layers "{layers[0]}" "{layers[1]}")\n'
-                f'\t\t(net "{net}")\n\t\t(uuid "{_uuid.uuid4()}")\n\t)\n')
+                f'\t\t(net "{net}")\n\t\t(uuid "{uuid or _uuid.uuid4()}")\n\t)\n')
     def add(self, chunks):
         i = self.text.rstrip().rfind(')'); self.text = self.text[:i] + ''.join(chunks) + ')\n'; self._parse()
-    def remove(self, uuids):
-        uuids = set(uuids); out = []; pos = 0; n = 0
+    def _track_blocks(self):
+        """(start, last character, uuid) of every track and via block in the text"""
         for m in re.finditer(r'\n\t\((segment|via)\b', self.text):
             s = m.start() + 1; depth = 0; j = s
             while True:
@@ -139,10 +154,27 @@ class Board:
                     depth -= 1
                     if depth == 0: break
                 j += 1
-            blk = self.text[s:j + 1]; u = re.search(r'\(uuid "([^"]+)"\)', blk)
-            if u and u.group(1) in uuids:
+            u = re.search(r'\(uuid "([^"]+)"\)', self.text[s:j + 1])
+            yield s, j, u.group(1) if u else None
+    def remove(self, uuids):
+        uuids = set(uuids); out = []; pos = 0; n = 0
+        for s, j, u in self._track_blocks():
+            if u in uuids:
                 out.append(self.text[pos:s]); pos = j + 2; n += 1
         out.append(self.text[pos:]); self.text = ''.join(out); self._parse(); return n
+    def _rewrite(self, uuids, edit):
+        uuids = set(uuids); out = []; pos = 0; done = []
+        for s, j, u in self._track_blocks():
+            if u not in uuids: continue
+            old = self.text[s:j + 1]; new = edit(old)
+            if new != old: out += [self.text[pos:s], new]; pos = j + 1; done.append(u)
+        out.append(self.text[pos:]); self.text = ''.join(out); self._parse(); return done
+    def lock(self, uuids):
+        """Marks these tracks and vias as locked, the way KiCad does. Returns the ones it locked: a piece that was locked already is
+        not in the list, so handing the list to unlock() leaves the user's own locks alone."""
+        return self._rewrite(uuids, lambda blk: blk if re.search(r'\blocked\b', blk) else re.sub(r'(\n\t\t)(\(layers? )', r'\1(locked yes)\1\2', blk, count=1))
+    def unlock(self, uuids):
+        return self._rewrite(uuids, lambda blk: blk.replace('\n\t\t(locked yes)', '', 1))
     def save(self, path=None, crlf=None):
         path = path or self.path
         if crlf is None: crlf = self.crlf

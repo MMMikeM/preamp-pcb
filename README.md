@@ -17,8 +17,8 @@ A step that exits 1 puts `work/board.kicad_pcb` back to what it was before the s
 failed stays in `work/<step>.kicad_pcb` to look at. A board with arc tracks is refused: straighten them in KiCad first.
 
 - `setup` also sets the board's via defaults to filled and capped, because the drops put vias in pads.
-- `2d` first joins supply pieces on the top layer at the limit `via_justify.py` checks (`neighbour_links.py --rule3`),
-  then drops the supply vias. Some of those joins are 8 to 11 mm of 0.3 to 0.4 mm track: look at them in KiCad.
+- `2d` adds no top-layer supply links of its own: `2b` has already joined supply pads up to 4 mm apart. It drops the supply
+  vias and lays the V+/V- zones on L5 (`supply5.py`). `via_justify.py` judges V+, V- and the bias nets by 2b's limits.
 - `2a`, `2b` and `2e` leave the other channel alone: `2h` then copies one channel onto it, skipping any net whose copy would
   collide with copper that is staying, and `2i` routes whatever the copy did not cover.
 - `2f` puts a via in each loose test point where one fits and has the router reach the rest by a track.

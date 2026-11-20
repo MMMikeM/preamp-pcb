@@ -1,14 +1,17 @@
 """Unjustified-via check: every time one net exists as two separate pieces on the top layer that are close together,
 ask whether they could have been joined on the top layer instead of through vias and another layer.
 Flag when a legal top-layer path exists with length <= max(RATIO * gap, gap + EXTRA).
+The supply rails and bias nets are judged by step 2b's own limits instead (neighbour_links): what 2b could not join goes to L5 by design.
 usage: via_justify.py BOARD [--json OUT] [--max-gap 8] [--include-gnd] [--include-decaps]"""
 import sys, json, math, argparse, itertools
-import board as bd, toplink as tl
+import board as bd, toplink as tl, neighbour_links as nl
 RATIO = 1.5; EXTRA = 3.0; MAX_GAP = 8.0
 
 def is_decap(B, pad):
     nets = {p['net'] for p in B.fps[pad['ref']]['pads']}
     return pad['ref'].startswith('C') and 'GND' in nets and nets & (bd.RAILS | bd.BIAS)
+
+def leaves_top(piece): return bool(piece['vias']) or any(p['drill'] for p in piece['pads'])
 
 def check(B, max_gap=MAX_GAP, include_gnd=False, include_decaps=False, nets=None, width=0.2):
     flags = []
@@ -16,19 +19,21 @@ def check(B, max_gap=MAX_GAP, include_gnd=False, include_decaps=False, nets=None
         if net in bd.GROUND and not include_gnd: continue
         comps = tl.components(B, net)
         if len(comps) < 2: continue
+        on_l5 = net in bd.RAILS | bd.BIAS; reach, ratio, extra = (min(max_gap, nl.MAX_GAP), nl.RATIO, nl.EXTRA) if on_l5 else (max_gap, RATIO, EXTRA)
         cand = []
         for a, b in itertools.combinations(range(len(comps)), 2):
             A, C = comps[a], comps[b]
             if not include_decaps and bd.is_supply(net) and any(len(c['pads']) == 1 and not c['segs'] and is_decap(B, c['pads'][0]) for c in (A, C)): continue
+            if not (leaves_top(A) or leaves_top(C)): continue           # nothing to justify: an unfinished net, which the connectivity check reports
             g, pa, pb = tl.gap(A, C)
-            if g <= max_gap: cand.append((g, a, b, pa, pb))
+            if g <= reach: cand.append((g, a, b, pa, pb))
         par = list(range(len(comps)))
         def f(i):
             while par[i] != i: par[i] = par[par[i]]; i = par[i]
             return i
         for g, a, b, pa, pb in sorted(cand):
             if f(a) == f(b): continue                      # already explained by a shorter flagged link
-            lim = max(RATIO * g, g + EXTRA)
+            lim = max(ratio * g, g + extra)
             r = tl.top_path(B, net, comps[a], comps[b], width, max_len=lim)
             if r and r[0] <= lim:
                 par[f(a)] = f(b)

@@ -5,7 +5,8 @@ high-impedance nets top-only with no vias, no vias in the hand-swap resistor pad
 unjustified vias (via_justify.py). KiCad's own DRC stays the final authority; this is the fast inner loop."""
 import sys, json, math, re, argparse, itertools
 from shapely.strtree import STRtree
-from shapely.geometry import Point
+from shapely.geometry import Point, Polygon
+from shapely.ops import unary_union
 import board as bd
 
 def _uf(n):
@@ -114,8 +115,29 @@ def no_via_pads(B):
             out += [dict(ref=p['ref'], pad=p['num']) for v in B.vias if g.contains(Point(v['x'], v['y']))]
     return out
 
-def symmetry(B, cx=None, shift=19.45, tol=0.02):
+def zone_integrity(B):
+    """A supply zone must still join all of its own vias once every other net's copper on its layer, with clearance, is cut out of it.
+    Ground pours are not judged: they cover the board and are cut everywhere by design."""
+    out = []
+    for z in B.zones:
+        if not z['net'] or z['net'] in bd.GROUND or len(z['pts']) < 3: continue
+        outline = Polygon(z['pts']); half = z['min_thickness'] / 2
+        for layer in z['layers']:
+            cut = unary_union([g.buffer(max(z['clearance'], bd.clearance(z['net'], n))) for n, g, k, o in B.copper(layer) if n != z['net'] and g.distance(outline) < 1.0])
+            fill = outline.difference(cut).buffer(-half).buffer(half)                # KiCad drops fill narrower than the zone's minimum width
+            pieces = [g for g in getattr(fill, 'geoms', [fill]) if not g.is_empty]
+            mine = [v for v in B.vias if v['net'] == z['net'] and outline.contains(Point(v['x'], v['y']))]
+            home = [next((i for i, g in enumerate(pieces) if g.intersects(B.via_geom(v))), None) for v in mine]
+            if len(set(home)) > 1 or None in home:
+                groups = {}
+                for v, h in zip(mine, home): groups.setdefault(h, []).append([round(v['x'], 2), round(v['y'], 2)])
+                main = max((h for h in groups if h is not None), key=lambda h: len(groups[h]), default=None)
+                out.append(dict(zone=z['name'], net=z['net'], layer=layer, pieces=len(pieces), cut_off=sorted((vs for h, vs in groups.items() if h != main or h is None), key=len)))
+    return out
+
+def symmetry(B, cx=None, shift=None, tol=0.02):
     """every X1nn part must have its X2nn twin either mirrored about the board centre or shifted by `shift` mm"""
+    shift = shift if shift is not None else bd.channel_shift(B)
     x0, _, x1, _ = B.outline(); cx = cx if cx is not None else (x0 + x1) / 2; out = []
     for r, f in B.fps.items():
         m = re.match(r'([A-Z]+)1(\d\d)$', r)
@@ -123,18 +145,24 @@ def symmetry(B, cx=None, shift=19.45, tol=0.02):
         t = B.fps.get(f'{m.group(1)}2{m.group(2)}')
         if not t: continue
         mir = abs(2 * cx - f['x'] - t['x']) < tol and abs(f['y'] - t['y']) < tol
-        cl = abs(f['x'] + shift - t['x']) < tol and abs(f['y'] - t['y']) < tol
-        if not (mir or cl): out.append(dict(ref=r, twin=t['ref'], dx_mirror=round(2 * cx - f['x'] - t['x'], 3), dx_copy=round(f['x'] + shift - t['x'], 3), dy=round(f['y'] - t['y'], 3)))
+        cl = shift is not None and abs(f['x'] + shift - t['x']) < tol and abs(f['y'] - t['y']) < tol
+        if not (mir or cl): out.append(dict(ref=r, twin=t['ref'], dx_mirror=round(2 * cx - f['x'] - t['x'], 3), dx_copy=round(f['x'] + (shift or 0) - t['x'], 3), dy=round(f['y'] - t['y'], 3)))
     return out
 
-def report(B, justify=True):
-    R = dict(unconnected=unconnected(B), clearance=clearances(B), holes=holes(B), edge=edge(B), hz=hz_rule(B), no_via_pads=no_via_pads(B), symmetry=symmetry(B))
+def report(B, justify=True, timing=None):
+    """timing: a dict that receives seconds per check, so a slow step can be traced to the check that costs it"""
+    import time; R = {}
+    def run(key, fn):
+        t0 = time.perf_counter(); R[key] = fn()
+        if timing is not None: timing[key] = round(time.perf_counter() - t0, 3)
+    for key, fn in (('unconnected', unconnected), ('clearance', clearances), ('holes', holes), ('edge', edge), ('hz', hz_rule), ('no_via_pads', no_via_pads), ('zone_integrity', zone_integrity), ('symmetry', symmetry)):
+        run(key, lambda fn=fn: fn(B))
     if justify:
-        import via_justify; R['unjustified_vias'] = [{k: v for k, v in x.items() if k != 'path'} for x in via_justify.check(B)]
+        import via_justify; run('unjustified_vias', lambda: [{k: v for k, v in x.items() if k != 'path'} for x in via_justify.check(B)])
     R['stats'] = dict(tracks=len(B.segs), vias=len(B.vias),
                       length={l: round(sum(math.dist((s['x1'], s['y1']), (s['x2'], s['y2'])) for s in B.segs if s['layer'] == l), 1) for l in B.copper_layers})
     return R
-FAIL = ('clearance', 'holes', 'edge', 'hz', 'no_via_pads', 'krt_drc')   # must be empty at every stage; krt_drc is stage_route's second opinion
+FAIL = ('clearance', 'holes', 'edge', 'hz', 'no_via_pads', 'zone_integrity', 'krt_drc')   # must be empty at every stage; krt_drc is stage_route's second opinion
 FINAL = ('unconnected', 'unjustified_vias')                        # must be empty at the end; symmetry is always informational (some differences are deliberate)
 def must_fix(R, final=False): return {k: len(R[k]) for k in FAIL + (FINAL if final else ()) if R.get(k)}
 

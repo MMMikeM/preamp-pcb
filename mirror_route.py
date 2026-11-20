@@ -1,6 +1,6 @@
 """Step 2h: copy one channel's routing to the other so both sides are identical.
 For every net that only touches source-channel parts (X1nn, plus its test points and wire pads), find how its pads map to the
-twin parts (X2nn): mirrored about the board centre, or shifted by SHIFT mm. If every pad of the net maps the same way,
+twin parts (X2nn): mirrored about the board centre, or shifted by the channel offset (board.channel_shift). If every pad of the net maps the same way,
 its tracks and vias are transformed the same way and written on the twin net (whatever was on the twin net is removed first).
 A net with no routing of its own is not copied, and neither is one whose copy would crowd copper that is staying (a supply
 track, a net left for individual routing, an earlier copy made with the other mapping). Its twin then keeps whatever it has.
@@ -8,8 +8,8 @@ Nets that mix both mappings, or touch shared parts (3xx, U5, U6), are listed and
 usage: mirror_route.py IN OUT [--from 1] [--dry-run] [--json OUT.json]"""
 import sys, re, json, math, argparse
 from shapely.strtree import STRtree
-import board as bd
-SHIFT = 19.45; TOL = 0.03
+import board as bd, supply5
+TOL = 0.03
 
 def is_src(ref, src): return bool(re.match(r'[A-Z]+%s\d\d$' % src, ref)) and not ref.startswith('TP')
 def is_dst(ref, src): return bool(re.match(r'[A-Z]+%s\d\d$' % ('2' if src == '1' else '1'), ref)) and not ref.startswith('TP')
@@ -18,7 +18,8 @@ def plan(B, src='1'):
     """Pads are paired by position, not by name, so shared parts with one half per channel (U6) pair up too.
     Test points are ignored here: they are connected after this step."""
     x0, _, x1, _ = B.outline(); cx = (x0 + x1) / 2; sgn = 1 if src == '1' else -1
-    T = {'mirror': lambda x: 2 * cx - x, 'copy': lambda x: x + sgn * SHIFT}
+    shift = bd.channel_shift(B); T = {'mirror': lambda x: 2 * cx - x}
+    if shift is not None: T['copy'] = lambda x: x + sgn * shift
     at = {}
     for p in B.pads:
         if not p['ref'].startswith('TP'): at.setdefault((round(p['x'] / 0.05), round(p['y'] / 0.05)), []).append(p)
@@ -65,7 +66,7 @@ def blocker(B, twin, segs, vias):
     for layer in B.copper_layers:
         new = [B.seg_geom(s) for s in segs if s['layer'] == layer] + [B.via_geom(v) for v in vias]
         if not new: continue
-        staying = [(n, g) for n, g, k, o in B.copper(layer) if n != twin]; tree = STRtree([g for _, g in staying])
+        staying = [(n, g) for n, g, k, o in B.copper(layer) if n != twin and not (k == 'seg' and supply5.is_centre(B, o))]; tree = STRtree([g for _, g in staying])   # a via may land on a scaffold track: run() trims it back, as drops does
         for g in new:
             for j in tree.query(g.buffer(bd.CLEAR_HZ + 0.01)):
                 n, h = staying[int(j)]
@@ -79,6 +80,8 @@ def run(B, src='1', dry=False):
         vias = [dict(v, x=f(v['x'])) for v in B.vias if v['net'] == t['net']]
         if not segs and not vias:
             skipped.append(dict(net=t['net'], why='it has no routing to copy, so its twin is left as it is')); continue
+        if any(x['locked'] for x in B.segs + B.vias if x['net'] == t['twin']):
+            skipped.append(dict(net=t['net'], why=f"its twin {t['twin']} has locked copper, which is left as it is")); continue
         hit = blocker(B, t['twin'], segs, vias)
         if hit:
             skipped.append(dict(net=t['net'], why=f"its copy would crowd {hit}, so its twin {t['twin']} is left as it is")); continue
@@ -87,11 +90,13 @@ def run(B, src='1', dry=False):
         B.remove([x['uuid'] for x in B.segs + B.vias if x['net'] == t['twin']])
         B.add([B.seg_text(s['x1'], s['y1'], s['x2'], s['y2'], s['w'], s['layer'], t['twin']) for s in segs] +
               [B.via_text(v['x'], v['y'], v['size'], v['drill'], t['twin']) for v in vias])
+    if todo and not dry: supply5.trim_centres(B, log=lambda *_: None)
     return todo, skipped
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(); ap.add_argument('inp'); ap.add_argument('out'); ap.add_argument('--from', dest='src', default='1', choices=['1', '2'])
     ap.add_argument('--dry-run', action='store_true'); ap.add_argument('--json'); a = ap.parse_args(); B = bd.Board(a.inp)
+    if not plan(B, a.src)[0]: sys.exit('no net of this channel has a twin, mirrored or shifted: the placement does not match what this step copies')
     todo, skipped = run(B, a.src, a.dry_run)
     print(len(todo), 'nets copied:', {m: sum(t['mode'] == m for t in todo) for m in ('mirror', 'copy')})
     for s in skipped: print('  left for individual routing:', s['net'], '-', s['why'])

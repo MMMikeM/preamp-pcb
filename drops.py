@@ -3,7 +3,7 @@
  --supply   one via per top-layer piece of each supply or bias net; decoupling caps always get their own
  --testpoints  one via in every surface-mount test-point pad that is not yet joined to its net (never on a high-impedance net)
 Never puts a via in the hand-swap resistors (board.NO_VIA_REFS) or in through-hole pads (they already reach every layer).
-Via size: 0.6/0.3 where the pad is at least 0.9 mm in both directions, otherwise 0.5/0.3 (0.1 mm ring, the project minimum).
+Via size: the largest of 0.7/0.3, 0.6/0.3, 0.5/0.3 that fits inside the pad and is legal there (0.5/0.3 = 0.1 mm ring, the project minimum).
 A via is placed at the pad centre; if that breaks a clearance it is slid along the pad's long axis; if nothing fits it is reported, not forced.
 Exit 2 when a pad could not take its via (the board is still saved), 0 otherwise.
 usage: drops.py IN OUT [--ground] [--supply] [--testpoints] [--json OUT.json]"""
@@ -11,17 +11,21 @@ import sys, json, math, argparse
 from shapely.geometry import Point
 from shapely.strtree import STRtree
 import board as bd, toplink as tl, checks
-BIG = (0.6, 0.3); SMALL = (0.5, 0.3)
+FAT = (0.7, 0.3); BIG = (0.6, 0.3); SMALL = (0.5, 0.3)
 NO_ROOM = 2          # exit code: apart from a crash's 1, so a caller can carry on where another step can still reach the pad
 
-def via_size(p): return BIG if min(p['w'], p['h']) >= 0.9 else SMALL
+def via_sizes(p):
+    """Largest ring first; a via never overhangs its pad, so narrow pads (IC pins, SOT) only get 0.5/0.3."""
+    m = min(p['w'], p['h']); return [s for s in (FAT, BIG, SMALL) if s[0] <= m + 1e-6] or [SMALL]
+def via_size(p): return via_sizes(p)[0]
 
 class Placer:
     def __init__(self, B):
         self.B = B; self.outline = B.outline(); self.refresh()
     def refresh(self):
         B = self.B; self.cu = []
-        for l in B.copper_layers: self.cu += [(n, g) for n, g, k, o in B.copper(l)]
+        import supply5                                           # finger centre tracks do not block a via: the zone flows round it and trim_centres cuts the track back
+        for l in B.copper_layers: self.cu += [(n, g) for n, g, k, o in B.copper(l) if not (isinstance(o, dict) and 'x1' in o and supply5.is_centre(B, o))]
         self.tree = STRtree([g for _, g in self.cu])
         self.holes = [(v['x'], v['y'], v['drill']) for v in B.vias] + [(p['x'], p['y'], p['drill']) for p in B.pads if p['drill']]
     def legal(self, x, y, size, drill, net):
@@ -32,19 +36,19 @@ class Placer:
             if n != net and g.distance(h) < bd.clearance(net, n) - 1e-6: return False
         return all(math.dist((x, y), h[:2]) - drill / 2 - h[2] / 2 >= bd.HOLE_GAP - 1e-6 for h in self.holes)
     def spot(self, p):
-        size, drill = via_size(p); horiz = p['w'] >= p['h']; reach = max(abs(p['w'] - p['h']) / 2, 0)
-        for k in range(0, int(reach / 0.05) + 1):
-            for s in ((0,) if k == 0 else (1, -1)):
-                x = p['x'] + (s * k * 0.05 if horiz else 0); y = p['y'] + (0 if horiz else s * k * 0.05)
-                if self.legal(x, y, size, drill, p['net']): return x, y, size, drill
-        if (size, drill) != SMALL and self.legal(p['x'], p['y'], *SMALL, p['net']): return p['x'], p['y'], *SMALL
+        horiz = p['w'] >= p['h']; reach = max(abs(p['w'] - p['h']) / 2, 0)
+        for size, drill in via_sizes(p):                      # the centre at a smaller size beats a slide at a bigger one only if the bigger fits nowhere
+            for k in range(0, int(reach / 0.05) + 1):
+                for s in ((0,) if k == 0 else (1, -1)):
+                    x = p['x'] + (s * k * 0.05 if horiz else 0); y = p['y'] + (0 if horiz else s * k * 0.05)
+                    if self.legal(x, y, size, drill, p['net']): return x, y, size, drill
         return None
 
 def has_via(B, p):
     g = B.pad_geom(p); return any(v['net'] == p['net'] and g.contains(Point(v['x'], v['y'])) for v in B.vias)
 def smd_top(p): return p['kind'] == 'smd' and p['layers'] == {'F.Cu'}
 
-def run(B, ground=False, supply=False, testpoints=False, log=print):
+def run(B, ground=False, supply=False, testpoints=False, signals=(), log=print):
     P = Placer(B); added = []; failed = []
     def drop(p, why, report=True):
         if p['ref'] in bd.NO_VIA_REFS or has_via(B, p): return False
@@ -68,10 +72,19 @@ def run(B, ground=False, supply=False, testpoints=False, log=print):
                 order = sorted(pads, key=lambda q: (q['ref'][0] == 'U', -min(q['w'], q['h'])))   # passives before IC pins, bigger pads first
                 if not any(drop(q, 'supply piece', report=False) for q in order) and pads:
                     failed.append(dict(pad='+'.join(checks.label(q) for q in pads), net=net, why='no legal via anywhere in this piece'))
+    for net in signals:                                                              # a signal that must leave the top layer: one via IN a pad per top-layer piece
+        for c in tl.components(B, net):
+            pads = [q for q in c['pads'] if smd_top(q) and q['ref'] not in bd.NO_VIA_REFS and not checks.is_tp(q)]
+            if any(q['drill'] for q in c['pads']) or c['vias'] or any(has_via(B, q) for q in pads) or not pads: continue
+            order = sorted(pads, key=lambda q: (q['ref'][0] in 'UQ', -min(q['w'], q['h'])))  # passives before IC and transistor pins, bigger pads first
+            if not any(drop(q, 'signal leaves the top layer', report=False) for q in order):
+                failed.append(dict(pad='+'.join(checks.label(q) for q in pads), net=net, why='no legal via in any pad of this piece'))
     if testpoints:
         for p in list(B.pads):
             if not checks.is_tp(p) or not p['net'] or p['net'] in bd.GROUND or bd.is_hz(p['net']) or p['drill']: continue
             if not checks.tp_joined(B, p): drop(p, 'test point')
+    if added:
+        import supply5; supply5.trim_centres(B, log)
     for a in added: log(f"via {a['pad']:<10} {a['net']:<20} {a['size']} ({a['why']})")
     for f in failed: log(f"NO ROOM {f['pad']} {f['net']} ({f['why']})")
     return added, failed

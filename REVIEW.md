@@ -1,128 +1,156 @@
-# route6: review brief
+# route6: review brief (20 Nov 2026)
 
-Scripts for re-routing the humbucker preamp board (41 x 74 mm) on 6 layers. Nothing here has been run against the real
-board file. Please review the code against the rules and guarantees below, run the tests, and report anything that
-breaks a guarantee, any rule the code does not actually enforce, and anything fragile.
+This replaces the earlier review notes. Everything below describes the code as committed; history is in git.
 
-## Why this exists
-The 4-layer routing was done net by net with fixed layers per net class. Results we do not want again:
-- two supply pads 2.9 mm apart joined through two vias and an inner layer (Q303.2 / R306.2 on BAT-);
-- trunks that changed layer several times; detours fixed only by clean-up passes after the fact;
-- neck and bridge channels drifting apart; checks run by hand and late.
+## What this is
+A staged pipeline that routes the humbucker preamp on 6 layers. It drives KiCadRoutingTools (Python driver, Rust search core;
+tag v0.24.1, commit 31049fd) and wraps it with the project's own rules: what is routed, in which order, on which layer, and
+whether a result is kept. The board is landscape, 74 x 41 mm: one channel strip at each end, shared blocks in the middle
+(project doc `claude/landscape-layout.md`).
 
-## Layer plan (JLC default 6-layer, 1.6 mm)
-| Layer | KiCad name | Use |
+## Layers
+| Layer | KiCad | Use |
 |---|---|---|
 | L1 | F.Cu | parts, local links, every high-impedance net |
-| L2 | In1.Cu | solid ground, never cut |
-| L3 | In2.Cu | hops and crossings only |
+| L2 | In1.Cu | solid ground |
+| L3 | In2.Cu | signal crossings and the one V+ crossing |
 | L4 | In3.Cu | solid ground |
-| L5 | In4.Cu | supply (V+, V-, battery) and bias (REF, PB, VR) trunks, ground fill elsewhere |
-| L6 | B.Cu | ground pour, test-point pads, wire pads; no tracks if avoidable |
+| L5 | In4.Cu | V+/V- zones, battery, REF/PB; ground fill elsewhere |
+| L6 | B.Cu | ground pour, test points, wire pads |
 
-## Rules the scripts must enforce
-1. High-impedance nets (`board.HZ_SUFFIX`) are on F.Cu only and have no vias. Clearance to them is 0.4 mm; everything else 0.2 mm.
-2. Other nets keep 1.0 mm from high-impedance copper where they can (a cost, not a hard limit). Rule 3 wins where they conflict.
-3. **A via must be justified.** Two pieces of one net that could be joined on the top layer with a path no longer than
-   `max(1.5 x gap, gap + 3 mm)` must be joined on the top layer. Step 2b uses the tighter `max(1.5 x gap, gap + 1 mm)`, gap <= 4 mm.
-4. Ground: one via in every surface-mount ground pad. No ground tracks on top.
-5. Supply and bias: one via per top-layer piece; decoupling caps always get their own.
-6. No via in the pads of R109, R117, R209, R217 (hand-swapped parts). No via in through-hole pads.
-7. Via in pad is allowed (the fab fills and caps vias; `setup6` sets that as the board's via default so the file says so).
-   0.6/0.3 mm where the pad is >= 0.9 mm both ways, else 0.5/0.3 mm.
-   Minimum annular ring 0.1 mm, hole to hole 0.25 mm, copper to board edge 0.5 mm.
-8. Above the op-amps the two channels are mirror images; from U3/U4 down the bridge is the neck shifted 19.45 mm.
-   Routing is done on one channel and copied (step 2h) wherever a net's pads map consistently.
-9. Scripts only add or remove tracks and vias. They never move a part.
+## Running it
+```
+export ROUTER_DIR=/path/to/KiCadRoutingTools
+export R6_WORK=/path/to/workdir        # default: route6/work
+python stage_route.py setup --from BOARD.kicad_pcb
+python stage_route.py 2a               # then 2b 2c 2d 2e 2h 2i 2f
+pytest -q tests                        # 38 tests, one needs ROUTER_DIR
+```
+Each step writes `<step>.kicad_pcb` and `<step>_checks.json` to the work folder and rolls the board back if a must-fix check fails.
+The neck-to-bridge copy shift is read from the placement (`board.channel_shift`); step 2h fails if no net has a twin.
 
-## Steps (`stage_route.py`)
-setup -> 2a (high-impedance, router) -> 2b (neighbour links) -> 2c (ground vias)
--> 2d (supply top links at the rule 3 limit, supply drops, L5 trunks with the router)
--> 2e (other signals: top first, L3 only if needed, router) -> 2h (copy to other channel)
--> 2i (what the copy did not cover: links, then the router as in 2a and 2e) -> 2f (test points) -> check.
-2a, 2b and 2e leave alone the nets 2h will make by copying and the other channel's own nets; routed first, they are in the copy's way.
-2g (tidy) is manual for now. A human reviews after every step.
-2d links supply pieces at the rule 3 limit before dropping vias because 2b's tighter limit would otherwise leave pieces that get a
-via and are then flagged by `via_justify`. With `ROUTER_DIR` set, every step also runs the router's own DRC and connectivity check.
+## Steps
+| Step | What it does | Main code |
+|---|---|---|
+| setup | 6-layer stack, ground zones, strips old routing except hand-routed gate nets | setup6.py |
+| 2a | high-impedance nets, top layer only, no vias | stage_route.route_hz |
+| 2b | neighbour links on top before anything else | neighbour_links.py, toplink.py |
+| 2c | one ground via per SMD ground pad | drops.py |
+| 2d | supply: drop vias, L5 zones and stubs, the V+ crossing, battery nets, REF/PB | drops.py, supply5.py |
+| 2e | remaining signals of the source channel, four passes (below) | stage_route.route_signals |
+| 2h | copy the source channel's routing to the other channel (mirror or shift per net); a twin with locked copper is left alone | mirror_route.py |
+| 2i | route what the copy could not cover | stage_route |
+| 2f | test points | drops.py |
 
-## What each file must guarantee
-| File | Guarantee |
+## Rules the code enforces
+- High-impedance nets (GA, GB, GA_M, GB_M, VB, SVN, SVP, SVN_I, SVP_I, SVN_R, SVP_R): top layer, no vias, 0.4 mm clearance.
+- A via must be justified: same-net pieces are joined on top first if a short path exists (via_justify.py). Signals and the
+  battery nets: pieces up to 8 mm apart, path within max(1.5 x gap, gap + 3 mm). V+, V- and the bias nets: step 2b's limits,
+  4 mm and max(1.5 x gap, gap + 1 mm), read from `neighbour_links`; what 2b could not join goes to L5 by design.
+- Vias: 0.3 mm hole; the largest of 0.7 / 0.6 / 0.5 mm that fits inside the pad and is legal there. No vias in R109, R117, R209, R217.
+- Ground: one via per SMD ground pad. Decoupling caps get their own supply via.
+- Supply on top: only the links step 2b makes (pads up to 4 mm apart). Step 2d adds none.
+- Step 2e passes:
+  1. top layer only;
+  2. a net that is incomplete, too long (`TOP_RATIO`, `TOP_EXTRA`), squeezed (`PINCH`: within 0.25 mm of two or more foreign pads,
+     not counting a pass under a two-pad part or the net's own parts) or running more than `HZ_RUN` mm inside `HZ_NEAR` of
+     high-impedance copper gets one via in a pad per top-layer piece, joined on L3 with no new vias;
+  3. nets still open, or whose L3-only join wandered (`L3_RATIO`, `L3_EXTRA`), go to the router with its own vias allowed, at
+     0.3 mm clearance and 1.0 mm from high-impedance nets;
+  4. pad vias again for anything still open.
+
+## Supply on L5 (supply5.py)
+- V+ and V- are zones (`BOX`) with a 0.6 mm scaffold track along each (`LINES`), so the router and the checks can see them before
+  KiCad fills the zones.
+- A supply via off the scaffold gets one straight stub to the nearest scaffold track that is legal.
+- V+ needs one crossing over V-, on L3, from the source cap C301 into the V+ finger at x = 51.9.
+- A via of another net may land inside a zone: `drops.Placer` ignores scaffold tracks, and `trim_centres` cuts the scaffold back
+  round the via afterwards.
+- The V+ zone is kept out from under the input stages, because the gate wire pads pierce every layer.
+
+## Timing and counters
+Every step writes `<step>_timing.json` to the work folder and prints one summary line, for example:
+`[2e] time 512 s: router 4 call(s) 470 s (path search 6.0 s) | other scripts 0 s | own work 9 s | checks 31 s | untimed 2 s`
+- `parts`: one record per sub-step with its seconds. Kinds: `router` (a whole router call), `script` (another script as a subprocess),
+  `own` (work inside stage_route) and `check` (the checks at the end of a step, each check timed separately in `per_check_s`).
+- A router record also carries the router's own figures scraped from its log (wall time, path-search time, iterations, rip-ups of
+  earlier copper, failed retries), what it achieved (nets given, nets completed, tracks and vias added) and how many earlier pieces were locked for the call.
+- `counts`: router calls, nets given and completed, and for step 2e the nets in each pass, each rejection reason, pad vias placed.
+- The timing code only observes. The one behavioural difference is that the router's output is now read line by line and passed
+  through, instead of going straight to the terminal.
+- Tested only by a `check` run and by feeding `run_router` a few sample log lines. No full step has been run with it.
+
+What is already known about speed:
+- In a router call, the path search (the Rust part) is about 1% of the wall time: 1.3 s of 134 s, 3.0 s of 125 s. The rest is the
+  router's Python driver, paid again on every call. Step 2e makes three or four calls.
+- In this project's own checks, `via_justify.check` is almost everything: 27.3 s of a 27.6 s `check` run on a board with 93 vias.
+  Clearance, edge and connectivity checks together take about 0.2 s. That check runs at the end of every step from 2b on.
+
+## State
+- Placement: second-pass landscape, on the board and committed (d0408b9). Only the hand-routed gate nets are routed on it.
+- On that placement, steps setup to 2d pass with no must-fix items: both supply rails connected, 68 vias, no clearance errors.
+- Step 2e has not completed cleanly on it. Two runs ended with one earlier-step net open each (/Neck/SB, then /Neck/GB) because
+  the router ripped copper from earlier steps (problem 1). A third run, with `guard` added, was interrupted before it finished.
+- On the first-pass landscape placement, before the rip problem showed, 2e connected every neck and shared net with no
+  clearance errors.
+- Steps 2h, 2i and 2f have not been run on the landscape board.
+
+## Known problems, most important first
+1. **The router rips earlier copper.** With `KICAD_RIP_PREEXISTING=0` and `KICAD_FINALIZE_RIP=0` set in the environment
+   (stage_route.py sets both at import), its log still shows "PRE-EXISTING rip" for nets it was not given, including the
+   hand-routed gate nets. Either the variables are not reaching the code path that rips, or a different path is involved.
+   The cause, as traced in the failing runs' logs on router `8a4432d`, is a third switch: at the end of a call the router's final
+   reconciliation grants itself rip authority over the nets that blocked a failed one, unless
+   `KICAD_RECONCILE_RIP_ESCALATION=0` (`route.py:8751` at v0.24.1, which has the same `route.py`). stage_route.py now sets all three. As a second line of
+   defence, `stage_route.router` locks every track and via of the nets the router was not given for the length of the call (the
+   router never rips a net with locked copper) and unlocks them afterwards; locks that were already in the board are left alone.
+   `stage_route.guard` no longer repairs anything: if an earlier piece is missing or changed, or copper appears for a net the
+   router was not given, the step fails and names the nets. Checked on router v0.24.1 with steps 2a, 2e and 2h on the 19 Nov
+   portrait placement only; not on the landscape board, and the rip itself was not reproduced. The locked pieces are
+   listed in `locked_for_router.json` in the work folder for the length of the call, so a run that is killed outright is
+   unlocked by the next step.
+2. **supply5's zone shapes are constants** derived by hand from the via positions of one placement. Moving a part with a supply
+   via can silently break them; the only protection is the checks inside `run` (zone separation, stub legality, scaffold against
+   through-hole pads).
+3. **Zone connectivity is emulated.** `checks.unconnected` treats anything on a zone's layer as joined to that zone's net. Real
+   connectivity is only known after KiCad fills the zones. `checks.zone_integrity` (must-fix at every step) covers the commonest
+   way that goes wrong: it cuts every other net's copper, with clearance, out of each supply zone's outline and fails if the
+   zone's own vias are no longer all in one piece. It does not judge ground pours, or a supply via that sits outside its zone.
+   It has only been run on a constructed zone in the tests, never on supply5's real ones.
+4. **Nothing added since the first review has tests**: via sizing by pad, pad vias for signals, the four-pass 2e and its rejection
+   rules, supply5, `trim_centres`, the timing code. (Locking, `guard`, `zone_integrity` and the shift read from the board have tests.)
+5. **The pinch rule let one through**: the final board of the last complete run still listed Net-(R307-Pad2) within 0.24 mm of
+   R308.2 and R307.1, which are its own parts. The pass-1 rule now excludes own parts; eval2e.py's report does not yet.
+6. `mirror_route` and `checks.symmetry` report 7 part pairs that are neither mirrored nor shifted (R107/R207, R110/R210, J101/J201
+   and others). These are real asymmetries in the strips, older than this work; nets touching them fall to step 2i.
+
+7. **A widened net clearance also blocks that net's neighbours at their own ends.** Measured on router 0.24.1: with V+ at
+   1.4 mm, a battery via 0.5 mm from a V+ via could not be routed at all; at the standard 0.2 mm it routed. `stage_route.router`
+   therefore retries, once and at the standard clearances, whatever a widened call left open (the bias call in 2d, pass 3 of
+   2e). The retry is free to run where the widened call would not: `zone_integrity` catches a track that cuts a supply finger,
+   and a pass-3 route that then runs beside high-impedance copper (the pass-1 test) is dropped and left to pass 4. The battery
+   call uses standard clearances.
+8. **The V+ crossing in supply5 is now tested against other copper before it is placed** and moves to the next landing position
+   if it does not fit, but `supply5.run` itself has never been run on any board from this tree.
+
+## Questions for the reviewer
+1. Answered: a third rip switch, plus locking; see problem 1.
+2. Should supply5 derive `BOX` and `LINES` from the via positions rather than carry them as constants?
+3. Are the pass-2 rejection rules better expressed as router clearances than as checks after routing? Pass 3 already does this
+   for its own run.
+4. `stage_route.py` has grown to hold routing policy, router invocation, repair and timing. Worth splitting?
+5. `via_justify.check` costs about 27 s per step. Is the path search inside it needed for every via on every step, or only for
+   vias added since the last step?
+
+## Files
+| File | Role |
 |---|---|
-| `board.py` | Reads pads (absolute position, size, rotation, round-rect corners, layers, drill), tracks, vias, zones. Refuses a board with arc tracks, which it cannot read. `add`/`remove` change only track and via blocks; the rest of the file stays byte-identical. `save` keeps the source file's line endings. |
-| `toplink.py` | `components`: pieces of a net joined on one layer. `top_path`: a path that keeps `clearance + width/2` from all other-net copper on that layer and 0.5 mm + width/2 from the board edge (rule 7), uses 45/90 degree moves, never turns more than 90 degrees, starts on an anchor that is itself legal. Inside its own copper it is free only where the whole track width stays inside. It minimises cost (length, a turn penalty and the rule 2 keep-away penalty); when that leaves no path within `max_len` it searches again without the keep-away, so rule 3 beats rule 2 (`LIMIT_BEATS_KEEP_AWAY`; `HZ_COST = 0` switches the keep-away off). Returns None if none exists within `max_len`. |
-| `neighbour_links.py` | Adds only F.Cu tracks; never joins two pieces twice; skips ground and (by default) high-impedance nets; result passes `checks.clearances`. `--rule3` uses `via_justify`'s limits instead of 2b's. |
-| `via_justify.py` | Flags every pair of top-layer pieces of a net that rule 3 says should be joined. Ground and lone decoupling-cap pads are excluded by default. |
-| `drops.py` | Rules 4-7, including the board edge. Reports pads where no legal via fits, once per supply piece, and exits 2 (1 is a crash); never forces one. Test points: surface-mount only, never on a high-impedance net, skipped when already joined to their net. A pad can still be blocked by a test point on the other side (TP205 under U4.10 on this placement, avoided because 2d joins U4.10 to U4.12 first); the tool reports it. |
-| `mirror_route.py` | Copies a net only if every pad has a twin at the mirrored or shifted position on one single twin net with the same pad count. A net with no routing is not copied, nor is one whose copy would come within clearance of copper that is staying, a hole or the board edge; its twin is left alone and step 2i routes it. `waits_for_copy` names the nets the earlier steps must leave for this one. Exit 1 if a copied net's connectivity differs from its source or a clearance breaks. |
-| `setup6.py` | Adds In3/In4, the 6-layer stackup and ground zones on In1, In3, In4, B; sets the board's via defaults to filled and capped; removes the In2 zone and all stale fills; rips all routing except top-only routing of the named nets that is still connected and legal. |
-| `checks.py` | `FAIL` lists must be empty after every step; `FINAL` lists at the end (`--final`). `top_incomplete`, `tp_joined` and `loose_testpoint_nets` judge a net without letting a bottom-side test point count against a top-only route. `holes` counts a via inside a through-hole pad as an error. |
-| `krt_checks.py` | Runs KiCadRoutingTools' `run_drc` and connectivity check on a saved board with this project's clearances. Needs `ROUTER_DIR`, scipy and Pillow, not the compiled router. |
-| `stage_route.py` | Runs one step, saves `work/<step>.kicad_pcb` and `work/<step>_checks.json`. Exits 1 on any must-fix item, on any script or router call that exits non-zero, and with `--final` on unconnected nets or unjustified vias. A step that exits 1 puts `work/board.kicad_pcb` back to what it was before the step. In 2f a test point with no room for a via is not a failure: the router reaches it by a track. The router's DRC items are must-fix; nets only it calls unconnected are listed as `krt_unconnected_extra`. |
-
-## Tests (`python -m pytest -q tests`, about 2 minutes, needs `pip install -r requirements.txt`)
-- `tests/board_4layer_rev1.kicad_pcb`: the finished 4-layer board (KiCad DRC clean). Our own checks must also find it clean.
-  `via_justify` must flag BAT- between Q302.2 and R304.2 (2.8 mm apart, joined through two vias).
-- `tests/board_placed_19nov.kicad_pcb`: current placement. After `setup6` and rip-up, `neighbour_links` must produce a direct
-  0.4 mm BAT- track between Q303.2 and R306.2 under 3 mm long (the case from the screenshots), with no clearance errors.
-- Ground drops must cover every eligible ground pad; copied nets must match their source's connectivity.
-- After the rule 3 supply links and the drops, `via_justify` must flag no supply pair.
-- Constructed cases: a link from a track end routed at exact clearance, a link beside the board edge, a twin net whose source has
-  no routing, a test point already joined to its net, a pad with no angle in a rotated footprint, a join that only fits inside the
-  keep-away, a board with an arc track, a via in a through-hole pad, a step that fails part-way.
-- With `ROUTER_DIR` set, the router's DRC must find links plus drops clean. Each test gets its own copy of the board.
-
-## What has been checked so far
-- All 24 tests pass (Python 3.9, shapely 2, numpy 2), one of them only with `ROUTER_DIR` set.
-- Every step was run end to end on the 19 Nov placement with KiCadRoutingTools v0.24.1: each exits 0 with no clearance, hole, edge,
-  high-impedance or hand-swap-pad item from our checks and none from the router's DRC. 2h copied 20 nets with no clearance problem
-  (6 more were skipped because their copy would collide, 13 have no twin mapping). The result: 857 tracks, 108 vias.
-- `check --final` on that result exits 1: 8 nets are not fully connected and 4 pairs are flagged by `via_justify` (see weak spots).
-- On that output and on the finished 4-layer board, the router's clearance, hole and edge results match ours.
-- Nothing from this version has been opened in KiCad. An earlier output of setup + 2b + 2c + supply drops was, with DRC clean.
-
-## Known weak spots (please look hard at these)
-1. **The router does not finish the board.** After all steps on the 19 Nov placement: `REF` is in 5 pieces (the bias trunk on L5 is
-   incomplete), `/Bridge/DA` in 3, `/Neck/SVP` and `/Bridge/SVP` each have one pad the router could not reach top-only, and four test
-   points are not joined (TP104, TP105, TP203, TP205). Four pairs are flagged as unjustified. These need a human in KiCad.
-   The router exits 0 when nets stay open, so only the unconnected count shows it. It does connect to vias already in pads and
-   keeps input tracks with their ids. With no `.kicad_pro` beside the board it falls back to its own limits, so `stage_route` passes
-   clearance, hole gap and edge explicitly; it also writes `work/board.kicad_pcb.kicad_pro`, which later router steps read.
-2. **`via_justify` only sees what is still possible.** On the old board it does not flag the exact pair from the screenshots
-   (Q303.2 / R306.2): another net had been routed between them. Order of routing is the real protection, the check is a backstop.
-   The router's compiled extension has `identify_blocking_obstacles`, which could name the net in the way; not used yet.
-3. **2e works per net, not per connection.** A net goes to L3 whole if its top-only route is too long.
-4. **L5 uses wide tracks for V+ and V-, not shaped pours.** Pours need a designed split and are not automated.
-5. **Path ends.** `top_path` leaves its first anchor exactly, but may arrive up to one grid step (0.05 mm) off the far pad's
-   centre, with a final short leg to the centre only when that leg stays inside the pad. That leg can be at any angle.
-6. **Pad shapes** other than rectangle, round-rect, circle and oval are treated as their bounding rectangle. Zone fills are not
-   modelled: a net with a zone is assumed joined wherever it has copper on that zone's layer (via, through-hole pad, pad in the pour).
-   The router's check models the pour from the zone outline instead and, on the current placement, calls `GND` unconnected at
-   J105 pin 1 and J205 pin 1 (through-hole pads 1.4 mm from the bottom edge). Not yet settled in KiCad.
-7. **Symmetry check** reports seven deliberate differences (R107, R110-R112 region, pickup pads). It is informational.
-8. Thresholds (1.5x, +1 mm, +3 mm, 4 mm, 8 mm) are first guesses. At the rule 3 limit, 2d adds supply links up to about 11 mm long
-   on the top layer at 0.3 to 0.4 mm; whether that is wanted is a design call.
-9. **A full run takes about ten minutes.** Roughly half is the router retrying nets that cannot be routed top-only (rip-up in the
-   first pass of 2e and 2i); a quarter is `via_justify` run in full after every step, where most flags are nets not routed yet.
-10. **Fill and cap is board-wide.** Every via, not only those in pads, is marked filled and capped. Not yet opened in KiCad.
-
-## What duplicates KiCadRoutingTools
-route6 was written without looking at what the router's own toolkit already had. These parts re-implement it. Three of the bugs
-fixed in review (pad angle, the edge rule, the bounding-box outline) were in this duplicated code, which theirs gets right.
-
-| route6 | Their equivalent | Why ours is still here | What would remove it |
-|---|---|---|---|
-| `board.py` reading pads, tracks, vias, zones | `kicad_parser.py` (rotated and custom pads, real outline with cut-outs) | Theirs parses a file only, not text; has no removal by uuid; its writer alters other parts of the file; and we need shapely shapes either way | Parse with theirs behind an adapter and keep only our text-level `add`, `remove`, `save` |
-| `checks.clearances`, `holes`, `edge` | `check_drc.run_drc` (22 checks, net-class clearances, real outline) | Ours run on a board in memory, in tests and inside steps; theirs needs a saved file | Save to a temporary file wherever a check is needed (0.2 to 0.4 s a call) and delete ours |
-| `checks.unconnected` and the pad groups behind it | `check_connected.py` | Same reason, and the test-point helpers need groups of pads, which theirs reports only by coordinate | The same adapter, plus matching its result back to pads |
-| The search inside `toplink.top_path` | The compiled `GridRouter` (single-layer search, soft keep-away) | Theirs has no length cap and does not return the shortest path by default | A wrapper that sets its heuristic weight to 1.0 and applies our cap; this is also the fix for step 2b and `via_justify` being slow |
-| `stage_route.py` | `run_plan.py`, `autoroute.py` | Theirs cannot run our scripts as steps and writes no check report per step | Nothing short of contributing that upstream |
-| The rip-up in `setup6.py` | `route.py --undo` with `!net` exclusions | Theirs has no "keep only if still connected and legal" filter | Use theirs and re-check the kept nets ourselves |
-| `drops.py` | Plane taps in `plane_pad_tap.py` | Different rule: theirs lets pads share a via; rules 4 to 6 want one per pad and none in named parts | Not a duplicate in practice |
-
-Not duplicated, as far as a search of their code and docs found: `via_justify.py`, `neighbour_links.py` (their router joins a net's
-short gaps last), `mirror_route.py` (their replicate moves parts, not routing) and the 4-to-6-layer conversion.
-Since `krt_checks.py`, every step runs their DRC and connectivity check next to ours, so a disagreement between the two is visible.
-
-## Not in this folder
-The router (KiCadRoutingTools, MIT, https://github.com/drandyhaas/KiCadRoutingTools; point `ROUTER_DIR` at a checkout) and the older 4-layer helpers in `../mike` (detour check, clean-up passes,
-island check). Those older helpers assume two routing layers and are not used by these steps.
+| board.py | board loader and writer, pad geometry, net classification |
+| checks.py, krt_checks.py | this project's checks; the router's own checks as a second opinion |
+| toplink.py, neighbour_links.py, via_justify.py | top-layer links and the via-justification rule |
+| drops.py | via placement in pads |
+| supply5.py | L5 supply for the landscape board (supply5_portrait.py: the portrait version, reference only) |
+| mirror_route.py | channel copy |
+| setup6.py | 6-layer setup |
+| stage_route.py | the pipeline |
+| spine.py, eval2e.py | helpers: finger-position search (portrait), reporting. eval2e.py needs r6render.py beside it and matplotlib |
