@@ -60,7 +60,7 @@ def sh(cmd, check=True, ok=(0,), **kw):
     with timed(' '.join(os.path.basename(str(c)) for c in cmd[:2]), kind='script'): r = subprocess.run(cmd, **kw)
     if r.returncode not in ok and check: raise StepFailed(f"{' '.join(os.path.basename(str(c)) for c in cmd[:2])} exited {r.returncode}")
     return r
-def router(nets, layers, extra=(), clearances=None):
+def router(nets, layers, extra=(), clearances=None, add_only=False):
     if not nets: print('  nothing to route on', *layers); return
     rd = os.environ.get('ROUTER_DIR')
     if not rd: raise StepFailed('set ROUTER_DIR to the KiCadRoutingTools checkout for this step')
@@ -74,8 +74,9 @@ def router(nets, layers, extra=(), clearances=None):
     with timed('router ' + '+'.join(layers), kind='router', layers=list(layers), nets_given=len(nets)) as rec:
         release_held(); A = bd.Board(BOARD); print('  $', ' '.join(str(c) for c in cmd))
         if os.path.exists(out): os.remove(out)
-        # the router never rips a net that has locked copper, whatever its rip switches say; a net it is given must stay unlocked or it is not routed
-        held = bd.Board(BOARD); ours = held.lock([x['uuid'] for x in held.segs + held.vias if x['net'] not in nets])
+        # the router never rips a net that has locked copper, whatever its rip switches say. A given net with locked copper is still routed, but the
+        # router's rescue and rip passes leave it alone, so a given net is locked only where its copper is finished and it may only gain a link
+        held = bd.Board(BOARD); ours = held.lock([x['uuid'] for x in held.segs + held.vias if add_only or x['net'] not in nets])
         json.dump(ours, open(held_file(), 'w')); held.save()
         try: rec.update(run_router(cmd, rd), earlier_pieces_locked=len(ours))
         finally: release_held()
@@ -88,7 +89,8 @@ def router(nets, layers, extra=(), clearances=None):
     shut_out = [n for n in nets if n not in done]
     if clearances and shut_out:       # a widened clearance also shuts a net out of its own pad when that pad sits inside it, so what stayed open gets one try without
         print('  still open with the widened clearances, retried with the standard ones:', shut_out); count('nets retried at standard clearances', len(shut_out))
-        router(shut_out, layers, extra)
+        at = list(extra).index('--clearance') if '--clearance' in extra else None
+        router(shut_out, layers, list(extra) if at is None else list(extra[:at]) + list(extra[at + 2:]), add_only=add_only)
 ROUTER_LOG = (('router_wall_s', r'Wall time:\s*([0-9.]+)s', float, max), ('router_search_s', r'Search time:\s*([0-9.]+)s', float, max),
               ('iterations', r'Net total time: [0-9.]+s, (\d+) iterations', int, sum), ('main_loop_s', r'"main_loop_time_s": ([0-9.]+)', float, max))
 ROUTER_COUNT = (('preexisting_rips', 'PRE-EXISTING rip'), ('ripup_retries_failed', 'Retry FAILED'), ('nets_ripped', 'Ripping '), ('not_connected_notes', 'NOT CONNECTED'))
@@ -120,7 +122,7 @@ def tree_len(pts):
     while len(inn) < len(pts):
         d, j = min((math.dist(pts[i], pts[j]), j) for i in inn for j in range(len(pts)) if j not in inn); inn.add(j); L += d
     return L
-def finish(step, commit, final=False):
+def finish(step, commit, final=False, failed=None):
     saved = [os.path.join(WORK, f'{step}.kicad_pcb'), os.path.join(WORK, f'{step}_checks.json')]
     shutil.copy(BOARD, saved[0])
     with timed('load board', kind='check'): B = bd.Board(BOARD)
@@ -134,7 +136,7 @@ def finish(step, commit, final=False):
     else: print('  second opinion skipped: ROUTER_DIR is not set')
     json.dump(R, open(saved[1], 'w'), indent=1)
     bad = checks.must_fix(R, final)
-    print(f'[{step}] tracks {R["stats"]["tracks"]} vias {R["stats"]["vias"]} unconnected nets {len(R["unconnected"])} unjustified {len(R.get("unjustified_vias", []))} | must-fix: {bad or "none"}')
+    print(f'[{step}] tracks {R["stats"]["tracks"]} vias {R["stats"]["vias"]} unconnected nets {len(R["unconnected"])} unjustified {len(R.get("unjustified_vias", []))} | must-fix: {bad or ("step failed: " + failed if failed else "none")}')
     # work/ is ignored, hence -f; the pathspec keeps anything else that happens to be staged out of the commit
     if commit and not bad and sh(['git', 'add', '-f', '--', *saved], check=False, cwd=HERE).returncode == 0:
         sh(['git', 'commit', '-q', '-m', f'route6 step {step}', '--', *saved], check=False, cwd=HERE)
@@ -154,6 +156,15 @@ def hz_run(B, net, since):
     near = unary_union([g for n, g, k, o in B.copper('F.Cu') if bd.is_hz(n)]).buffer(HZ_NEAR)
     own = unary_union([Point(p['x'], p['y']).buffer(OWN_PAD) for p in B.pads if p['net'] == net])
     return sum(g.intersection(near).difference(own).length for g in mine)
+def squeezed(B, net, since):
+    """Foreign pads the net's top-layer track newer than `since` passes within PINCH mm of; two or more is a squeeze"""
+    from shapely.geometry import LineString
+    mine = [LineString([(x['x1'], x['y1']), (x['x2'], x['y2'])]) for x in B.segs if x['net'] == net and x['uuid'] not in since and x['layer'] == 'F.Cu']
+    wid = max([x['w'] for x in B.segs if x['net'] == net and x['uuid'] not in since] or [0.2])
+    own_refs = {p['ref'] for p in B.pads if p['net'] == net}                    # the other pad of a part the net ends on is not a squeeze
+    pinch = [checks.label(p) for p in B.pads if p['net'] != net and p['ref'] not in own_refs and 'F.Cu' in p['layers'] and mine and min(g.distance(B.pad_geom(p)) for g in mine) - wid / 2 < PINCH]
+    under = {r for r in {x.split('.')[0] for x in pinch} if len(B.fps[r]['pads']) == 2 and sum(x.split('.')[0] == r for x in pinch) == 2}   # passing under a two-pad part between its pads is allowed
+    return [x for x in pinch if x.split('.')[0] not in under]
 def wanders(B, net):
     """(too long, length, shortest tree) of a net that was allowed off the top layer"""
     t = tree_len([(p['x'], p['y']) for p in B.pads if p['net'] == net and not checks.is_tp(p)])
@@ -161,20 +172,14 @@ def wanders(B, net):
     return L > max(L3_RATIO * t, t + L3_EXTRA), L, t
 def route_signals(nets, step='2e'):
     """Returns (nets still open, nets routed too long): what the passes could not put right."""
-    before = {x['uuid'] for x in bd.Board(BOARD).segs}; count(f'{step} pass 1 nets (top only)', len(nets))
+    A = bd.Board(BOARD); before = {x['uuid'] for x in A.segs}; start = before | {x['uuid'] for x in A.vias}; count(f'{step} pass 1 nets (top only)', len(nets))
     router(nets, ['F.Cu'], ['--via-cost', '100000'])                       # pass 1: top only; nets that do not fit stay open
     t_judge = time.perf_counter()
     B = bd.Board(BOARD); again = []; redo = []
-    from shapely.geometry import LineString, Point; from shapely.ops import unary_union
     for n in nets:
         pts = [(p['x'], p['y']) for p in B.pads if p['net'] == n and not checks.is_tp(p)]; t = tree_len(pts)
         L = sum(math.dist((x['x1'], x['y1']), (x['x2'], x['y2'])) for x in B.segs if x['net'] == n)
-        mine = [LineString([(x['x1'], x['y1']), (x['x2'], x['y2'])]) for x in B.segs if x['net'] == n and x['uuid'] not in before and x['layer'] == 'F.Cu']
-        wid = max([x['w'] for x in B.segs if x['net'] == n and x['uuid'] not in before] or [0.2])
-        own_refs = {p['ref'] for p in B.pads if p['net'] == n}                    # the other pad of a part the net ends on is not a squeeze
-        pinch = [checks.label(p) for p in B.pads if p['net'] != n and p['ref'] not in own_refs and 'F.Cu' in p['layers'] and mine and min(g.distance(B.pad_geom(p)) for g in mine) - wid / 2 < PINCH]
-        under = {r for r in {x.split('.')[0] for x in pinch} if len(B.fps[r]['pads']) == 2 and sum(x.split('.')[0] == r for x in pinch) == 2}   # passing under a two-pad part between its pads is allowed
-        pinch = [x for x in pinch if x.split('.')[0] not in under]
+        pinch = squeezed(B, n, before)
         near_hz = hz_run(B, n, before)
         if L > max(TOP_RATIO * t, t + TOP_EXTRA): again.append(n); redo.append(n); count(f'{step} rejected: too long on top'); print(f'  {n}: too long on top ({L:.0f} mm for a {t:.0f} mm tree)')
         elif len(pinch) >= 2: again.append(n); redo.append(n); count(f'{step} rejected: squeezed'); print(f'  {n}: squeezed on top, under {PINCH} mm from {pinch}')
@@ -206,13 +211,28 @@ def route_signals(nets, step='2e'):
     # in a shared call the router's own ordering decides who gets the ground; a net that came out open or wandering gets a call to itself
     B = bd.Board(BOARD); state = lambda B, n: (not checks.top_incomplete(B, n) and not wanders(B, n)[0], not checks.top_incomplete(B, n), -wanders(B, n)[1])
     alone = sorted([n for n in left if not state(B, n)[0]], key=lambda n: wanders(B, n)[2])
+    def solo(n, route, since):
+        B = bd.Board(BOARD); B.remove([x['uuid'] for x in B.segs + B.vias if x['net'] == n and x['uuid'] not in since]); B.save(BOARD); route([n]); return bd.Board(BOARD)
     for n in alone:
         B = bd.Board(BOARD); was = state(B, n); shutil.copy(BOARD, BOARD + '.shared')
-        B.remove([x['uuid'] for x in B.segs + B.vias if x['net'] == n and x['uuid'] not in held]); B.save(BOARD)
-        pass3([n]); B = bd.Board(BOARD); now = state(B, n); far, L, t = wanders(B, n)
+        B = solo(n, pass3, held); now = state(B, n); far, L, t = wanders(B, n)
         if now < was: shutil.copy(BOARD + '.shared', BOARD)
         count(f'{step} pass 3 nets routed again alone'); print(f"  {n} alone: {'joined' if now[1] else 'open'}, {L:.0f} mm for a {t:.0f} mm tree" + ('; worse than in the shared call, which is kept' if now < was else ''))
+        if max(now, was)[0]: continue
+        # the wider gap is only ever given up as a fallback, and the squeeze test it stood in for is applied instead; the net starts again from
+        # nothing, as its earlier pieces and pad vias were placed for the wider gap and boxed it in at it
+        shutil.copy(BOARD, BOARD + '.shared')
+        B = solo(n, lambda some: router(some, ['F.Cu', 'In2.Cu'], ['--layer-costs', '1.0', '1.2', '--via-cost', '150']), start)
+        ok, (far, L, t), pinch = state(B, n)[0], wanders(B, n), squeezed(B, n, start)
+        if not ok or len(pinch) >= 2: shutil.copy(BOARD + '.shared', BOARD)
+        count(f'{step} pass 3 nets routed alone at standard clearances'); count(f'{step} pass 3 standard-clearance routes kept', int(ok and len(pinch) < 2))
+        print(f"  {n} alone at standard clearances: {'joined' if state(B, n)[1] else 'open'}, {L:.0f} mm for a {t:.0f} mm tree"
+              + ('' if ok and len(pinch) < 2 else f"; not kept ({'squeezed, under ' + str(PINCH) + ' mm from ' + str(pinch) if ok else 'open or too long'})"))
     if os.path.exists(BOARD + '.shared'): os.remove(BOARD + '.shared')
+    B = bd.Board(BOARD); tight = [n for n in left if len(squeezed(B, n, held)) >= 2]      # the shared call's own retry at standard clearances answers to the same test
+    if tight:
+        B.remove([x['uuid'] for x in B.segs + B.vias if x['net'] in tight and x['uuid'] not in held]); B.save(BOARD)
+        count(f'{step} pass 3 routes dropped: squeezed', len(tight)); print(f'  pass 3 routes dropped, squeezed between foreign pads: {tight}')
     B = bd.Board(BOARD); crept = [n for n in left if hz_run(B, n, held) > HZ_RUN]         # the retry at standard clearances is free to hug high-impedance copper
     if crept:
         B.remove([x['uuid'] for x in B.segs + B.vias if x['net'] in crept and x['uuid'] not in held]); B.save(BOARD)
@@ -260,20 +280,20 @@ def run_step(s, src):
     elif s == '2f':
         # a test point with no room for a via is not a failure here: the router reaches it by a track instead
         sh([PY, os.path.join(HERE, 'drops.py'), BOARD, BOARD, '--testpoints', '--json', os.path.join(WORK, '2f_drops.json')], ok=(0, drops.NO_ROOM))
-        router(checks.loose_testpoint_nets(bd.Board(BOARD)), ['F.Cu', 'In2.Cu'], ['--layer-costs', '1.0', '1.2', '--via-cost', '150'])
+        router(checks.loose_testpoint_nets(bd.Board(BOARD)), ['F.Cu', 'In2.Cu'], ['--layer-costs', '1.0', '1.2', '--via-cost', '150'], add_only=True)
     elif s != 'check': raise SystemExit('unknown step ' + s)
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument('step'); ap.add_argument('--from', dest='src'); ap.add_argument('--commit', action='store_true')
     ap.add_argument('--final', action='store_true'); a = ap.parse_args()
-    os.makedirs(WORK, exist_ok=True); failed = False; release_held()
+    os.makedirs(WORK, exist_ok=True); failed = None; release_held()
     before = BOARD + '.before'; had_board = os.path.exists(BOARD)
     if had_board: shutil.copy(BOARD, before)
     t0 = time.perf_counter()
     try: run_step(a.step, a.src)
-    except StepFailed as e: failed = True; print(f'[{a.step}] step failed: {e}')
+    except StepFailed as e: failed = str(e); print(f'[{a.step}] step failed: {e}')
     if failed and not os.path.exists(BOARD): sys.exit(1)
-    code = finish(a.step, a.commit and not failed, a.final) or int(failed)
+    code = finish(a.step, a.commit and not failed, a.final, failed) or int(bool(failed))
     write_timing(a.step, time.perf_counter() - t0)
     if had_board:
         if code and a.step != 'check':

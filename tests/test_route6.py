@@ -228,3 +228,20 @@ def test_copy_report_marks_a_net_the_other_channel_already_has(bare):
     done = len([p for p in bare.pads if p['net'] == '/Bridge/SB' and not checks.is_tp(p)]) == 2
     s = next(s for s in mirror_route.run(bare, dry=True)[1] if s['net'] == '/Neck/SB')
     assert ('already_routed_as' in s) == done
+def _fake_router(B, tmp_path, monkeypatch):
+    monkeypatch.setattr(stage_route, 'WORK', str(tmp_path)); monkeypatch.setattr(stage_route, 'BOARD', str(tmp_path / 'board.kicad_pcb')); monkeypatch.setenv('ROUTER_DIR', str(tmp_path))
+    B.save(stage_route.BOARD); calls = []
+    def run(cmd, cwd):                                                                  # adds nothing, so every open net stays open
+        A = bd.Board(stage_route.BOARD); calls.append((cmd, {x['net'] for x in A.segs + A.vias if x['locked']}))
+        import shutil; shutil.copy(stage_route.BOARD, stage_route.BOARD + '.tmp'); return dict(returncode=0)
+    monkeypatch.setattr(stage_route, 'run_router', run); return calls
+def test_the_retry_after_widened_clearances_drops_the_wider_default_too(linked, tmp_path, monkeypatch):
+    B, _ = linked; calls = _fake_router(B, tmp_path, monkeypatch); n = next(n for n in B.nets if n.startswith('/Neck/') and checks.top_incomplete(B, n))
+    stage_route.router([n], ['F.Cu'], ['--via-cost', '150', '--clearance', '0.3'], clearances=str(tmp_path / 'wide.json'))
+    assert len(calls) == 2 and '--clearance' in calls[0][0][calls[0][0].index('--via-cost'):]
+    assert calls[1][0][calls[1][0].index('--clearance') + 1] == str(bd.CLEAR) and '0.3' not in calls[1][0]
+def test_add_only_locks_the_given_nets_own_copper_for_the_call(linked, tmp_path, monkeypatch):
+    B, _ = linked; calls = _fake_router(B, tmp_path, monkeypatch); n = B.segs[0]['net']
+    stage_route.router([n], ['F.Cu']); assert n not in calls[0][1]
+    stage_route.router([n], ['F.Cu'], add_only=True); assert n in calls[1][1]
+    assert not any(x['locked'] for x in bd.Board(stage_route.BOARD).segs if x['net'] == n)
