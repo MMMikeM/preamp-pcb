@@ -222,3 +222,9 @@ def test_a_net_off_the_top_layer_is_judged_by_its_length(bare):
     track(bare, '/Neck/DA', [(a['x'], a['y']), (b['x'], b['y'])], layer='In2.Cu'); far, L, t = stage_route.wanders(bare, '/Neck/DA')
     assert not far and L == pytest.approx(d)
     track(bare, '/Neck/DA', [(a['x'], a['y']), (a['x'], a['y'] + 2 * t + stage_route.L3_EXTRA)], layer='In2.Cu'); assert stage_route.wanders(bare, '/Neck/DA')[0]
+def test_copy_report_marks_a_net_the_other_channel_already_has(bare):
+    assert mirror_route.other_side(bare, '/Neck/GA') == {'/Bridge/GA'}
+    a, b = [p for p in bare.pads if p['net'] == '/Bridge/SB' and not checks.is_tp(p)][:2]; track(bare, '/Bridge/SB', [(a['x'], a['y']), (b['x'], b['y'])])
+    done = len([p for p in bare.pads if p['net'] == '/Bridge/SB' and not checks.is_tp(p)]) == 2
+    s = next(s for s in mirror_route.run(bare, dry=True)[1] if s['net'] == '/Neck/SB')
+    assert ('already_routed_as' in s) == done

@@ -8,7 +8,7 @@ Nets that mix both mappings, or touch shared parts (3xx, U5, U6), are listed and
 usage: mirror_route.py IN OUT [--from 1] [--dry-run] [--json OUT.json]"""
 import sys, re, json, math, argparse
 from shapely.strtree import STRtree
-import board as bd, supply5
+import board as bd, supply5, checks
 TOL = 0.03
 
 def is_src(ref, src): return bool(re.match(r'[A-Z]+%s\d\d$' % src, ref)) and not ref.startswith('TP')
@@ -72,6 +72,11 @@ def blocker(B, twin, segs, vias):
                 n, h = staying[int(j)]
                 if g.distance(h) < bd.clearance(twin, n) - bd.TOL: return n or 'unconnected copper'
 
+def other_side(B, net, src='1'):
+    """The nets on the other channel's copies of this net's pads (same pad of the part with the other channel's number)."""
+    num = {(p['ref'], p['num']): p['net'] for p in B.pads}; flip = '2' if src == '1' else '1'
+    return {num[k] for k in ((re.sub(r'^([A-Z]+)%s(\d\d)$' % src, r'\g<1>%s\2' % flip, p['ref']), p['num']) for p in B.pads if p['net'] == net and is_src(p['ref'], src)) if num.get(k)}
+
 def run(B, src='1', dry=False):
     planned, skipped, T = plan(B, src); todo = []
     for t in planned:
@@ -91,6 +96,10 @@ def run(B, src='1', dry=False):
         B.add([B.seg_text(s['x1'], s['y1'], s['x2'], s['y2'], s['w'], s['layer'], t['twin']) for s in segs] +
               [B.via_text(v['x'], v['y'], v['size'], v['drill'], t['twin']) for v in vias])
     if todo and not dry: supply5.trim_centres(B, log=lambda *_: None)
+    routed = lambda n: any(x['net'] == n for x in B.segs + B.vias) and not checks.unconnected(B, [n])
+    for s in skipped:                                     # a net with nothing to do on the other channel is not work for step 2i, and the report should not say so
+        theirs = other_side(B, s['net'], src) - {s['net']}
+        if theirs and all(routed(n) for n in theirs): s['already_routed_as'] = sorted(theirs)
     return todo, skipped
 
 if __name__ == '__main__':
@@ -99,10 +108,11 @@ if __name__ == '__main__':
     if not plan(B, a.src)[0]: sys.exit('no net of this channel has a twin, mirrored or shifted: the placement does not match what this step copies')
     todo, skipped = run(B, a.src, a.dry_run)
     print(len(todo), 'nets copied:', {m: sum(t['mode'] == m for t in todo) for m in ('mirror', 'copy')})
-    for s in skipped: print('  left for individual routing:', s['net'], '-', s['why'])
+    for s in skipped:
+        if 'already_routed_as' in s: print('  already routed on the other channel:', s['net'], 'as', ', '.join(s['already_routed_as']))
+        else: print('  left for individual routing:', s['net'], '-', s['why'])
     if a.json: json.dump(dict(copied=todo, skipped=skipped), open(a.json, 'w'), indent=1)
     if not a.dry_run:
-        import checks
         diff = []; cl = []
         if todo:                                          # checks.unconnected treats an empty list as every net
             pieces = lambda nets: {u['net']: u['pieces'] for u in checks.unconnected(B, nets)}
