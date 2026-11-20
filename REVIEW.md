@@ -6,7 +6,10 @@ text is in git (`874be79` and before). How to run the pipeline is in `README.md`
 ## What this feedback is based on
 - Router: KiCadRoutingTools tag v0.24.1 (`31049fd`).
 - Board: the 19 Nov **portrait** placement in `tests/board_placed_19nov.kicad_pcb`. The landscape board (`25a2cbd` in the
-  kicad repo) is not on the reviewer's machine, so nothing below has been run on it.
+  kicad repo) is not on the reviewer's machine, so the reviewer has run nothing on it.
+- The author has run the landscape board: three 2e runs on the neck strip and a bridge run through 2i. Those runs are
+  where the five points come from. I do not know which commit of this repo each of them used, so I cannot say which of the
+  changes below they exercised. That is the first question in "Feedback wanted".
 - On that fixture: 40 tests pass, and steps setup, 2a, 2b, 2c, 2e, 2h and 2i run with the real router. Step 2d cannot run
   there, because supply5's zone shapes are for the landscape board. Step 2f was not run.
 
@@ -73,8 +76,9 @@ so it does not depend on net names. On the fixture this covers GA, GB, GA_M, GB_
   over-length nets.
 
 ## What I would not trust yet
-1. **Nothing here has run on the landscape board from this tree.** Step 2d in its current form, `supply5.run`, the zone
-   check on real zones and the derived shift (it should come out as 52.45) have only been reasoned about.
+1. **I have not seen any of this run on the landscape board.** The author's runs cover some of it, but until the questions
+   below are answered I am treating step 2d in its current form, `supply5.run`, the zone check on real zones and the
+   derived shift (it should come out as 52.45) as reasoned about, not observed.
 2. **A widened clearance blocks a net at its own pads.** Measured: with V+ at 1.4 mm, a battery via 0.5 mm from a V+ via
    could not be routed; at 0.2 mm it routed. The retry at standard clearances is the workaround, not a cure.
 3. **supply5's zone shapes are constants** for one placement. The x = 32.45 change is that weakness showing up for real.
@@ -86,6 +90,36 @@ so it does not depend on net names. On the fixture this covers GA, GB, GA_M, GB_
 6. **Untested code from the landscape patch:** via sizing by pad, pad vias for signals, the four-pass logic as a whole,
    `trim_centres`, the timing code.
 
+## Feedback wanted
+From the landscape runs. A line each is enough; "did not look" is a useful answer too.
+
+1. **Which commit of this repo did each run use?** The three neck 2e runs, and the bridge run through 2i. In particular:
+   before or after `06448ec` (locking, `guard` as a check, zone check), `874be79` (2e fails on open or over-length nets) and
+   `50ea148` (the same for 2i).
+2. **Rips.** With all three switches set and earlier copper locked, does any router log still show "PRE-EXISTING rip"? Has
+   `guard` failed a step, and if so on which nets?
+3. **Shift.** Does `board.channel_shift` come out as 52.45 on `25a2cbd`? (`python -c "import board; print(board.channel_shift(board.Board('BOARD')))"`)
+4. **Step 2d.** Does it pass `zone_integrity`? Did the V+ crossing land at its first position or move? Did moving the scaffold
+   line to x = 32.45 clear the loose end the router's checker flagged?
+5. **The standard-clearance retry.** How often does "still open with the widened clearances, retried with the standard ones"
+   print, in which step, and for which nets? Did the retried nets complete? Was any pass-3 route dropped for running beside
+   high-impedance copper?
+6. **The new failures.** Do 2e and 2i now fail on `25a2cbd`, and on which nets? Is the length limit right? As set, CLD at
+   99 mm for a 41 mm tree fails (limit 74 mm) and the 53 and 61 mm runs pass.
+7. **Retry alone.** When a net was routed again in a call of its own, how often was it better than the shared call, and how
+   often was the shared result kept?
+8. **The copy report.** Does 2h now say "already routed on the other channel" for the hand-routed bridge nets, and is any net
+   skipped for a locked twin that you wanted copied?
+9. **`via_justify`.** How many unjustified vias are left at the end, on which nets? Is it still about 27 s a step now that
+   pairs with no via are skipped?
+10. **SVP.** How long is `/Neck/SVP` against its tree on the landscape board? On the portrait placement it is 33 mm for 10.7.
+11. **Points 2 and 3.** Do you agree with removing a blocking bias track in 2h and re-routing it in 2i, and with the outline
+    for partial copies? Anything in the placement that would break either?
+12. **The work folder.** The per-step `_checks.json` and `_timing.json` files from the bridge run, and the log of the 2e run
+    that left OB open, would answer most of the above. A branch or a zip is fine.
+
+Where an answer contradicts something above, say so plainly: the portrait fixture is a poor stand-in for the real board.
+
 ## What I need
-The board at `25a2cbd` on the reviewer's machine. With it: a full run setup to 2f, points 2 and 3 built and verified, and
-the 2f dry run.
+The answers above, and the board at `25a2cbd` on the reviewer's machine. With the board: a full run setup to 2f, points 2
+and 3 built and verified, and the 2f dry run.
