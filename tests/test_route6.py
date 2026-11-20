@@ -217,3 +217,8 @@ def test_hz_run_measures_new_track_beside_high_impedance_copper(bare):
     track(bare, '/Neck/DA', [(hz['x'] - 3, y), (hz['x'] + 3, y)])
     assert stage_route.hz_run(bare, '/Neck/DA', set()) > stage_route.HZ_RUN
     assert stage_route.hz_run(bare, '/Neck/DA', {s['uuid'] for s in bare.segs}) == 0
+def test_a_net_off_the_top_layer_is_judged_by_its_length(bare):
+    a, b = [p for p in bare.pads if p['net'] == '/Neck/DA' and not checks.is_tp(p)][:2]; d = math.dist((a['x'], a['y']), (b['x'], b['y']))
+    track(bare, '/Neck/DA', [(a['x'], a['y']), (b['x'], b['y'])], layer='In2.Cu'); far, L, t = stage_route.wanders(bare, '/Neck/DA')
+    assert not far and L == pytest.approx(d)
+    track(bare, '/Neck/DA', [(a['x'], a['y']), (a['x'], a['y'] + 2 * t + stage_route.L3_EXTRA)], layer='In2.Cu'); assert stage_route.wanders(bare, '/Neck/DA')[0]

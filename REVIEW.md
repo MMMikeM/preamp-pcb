@@ -24,7 +24,7 @@ export ROUTER_DIR=/path/to/KiCadRoutingTools
 export R6_WORK=/path/to/workdir        # default: route6/work
 python stage_route.py setup --from BOARD.kicad_pcb
 python stage_route.py 2a               # then 2b 2c 2d 2e 2h 2i 2f
-pytest -q tests                        # 38 tests, one needs ROUTER_DIR
+pytest -q tests                        # 39 tests, one needs ROUTER_DIR
 ```
 Each step writes `<step>.kicad_pcb` and `<step>_checks.json` to the work folder and rolls the board back if a must-fix check fails.
 The neck-to-bridge copy shift is read from the placement (`board.channel_shift`); step 2h fails if no net has a twin.
@@ -56,8 +56,13 @@ The neck-to-bridge copy shift is read from the placement (`board.channel_shift`)
      not counting a pass under a two-pad part or the net's own parts) or running more than `HZ_RUN` mm inside `HZ_NEAR` of
      high-impedance copper gets one via in a pad per top-layer piece, joined on L3 with no new vias;
   3. nets still open, or whose L3-only join wandered (`L3_RATIO`, `L3_EXTRA`), go to the router with its own vias allowed, at
-     0.3 mm clearance and 1.0 mm from high-impedance nets;
+     0.3 mm clearance and 1.0 mm from high-impedance nets. A net that comes out of that shared call open or wandering (the
+     same `L3_RATIO`, `L3_EXTRA` test) is ripped and routed again in a call of its own, shortest tree first; the better of
+     the two results is kept;
   4. pad vias again for anything still open.
+- Step 2e fails if any net it was given is still open (test points aside) or over the `L3_RATIO`, `L3_EXTRA` length at the
+  end. The result is kept in `2e.kicad_pcb` to look at and the board is rolled back. Step 2i runs the same passes but only
+  reports.
 
 ## Supply on L5 (supply5.py)
 - V+ and V- are zones (`BOX`) with a 0.6 mm scaffold track along each (`LINES`), so the router and the checks can see them before
@@ -95,11 +100,11 @@ What is already known about speed:
   - step 2e did not complete cleanly: two runs ended with one earlier-step net open each (/Neck/SB, then /Neck/GB) because
     the router ripped copper from earlier steps (problem 1);
   - steps 2h, 2i and 2f were never run.
-- What has run on this commit: the 38 tests, and steps setup, 2a, 2b, 2c, 2e and 2h on the 19 Nov portrait placement
+- What has run on this commit: the 39 tests, and steps setup, 2a, 2b, 2c, 2e and 2h on the 19 Nov portrait placement
   (`tests/board_placed_19nov.kicad_pcb`) with router v0.24.1, all with no must-fix items. Step 2d cannot run on that
   placement, because supply5's zone shapes are for the landscape board.
 - Next: run setup to 2f on the landscape board. First things to look at: that `board.channel_shift` gives 52.45, that 2d
-  passes `zone_integrity`, and that no router call fails in `guard`.
+  passes `zone_integrity`, that no router call fails in `guard`, and what 2e's new end-of-step test reports.
 
 ## Known problems, most important first
 1. **The router rips earlier copper.** With `KICAD_RIP_PREEXISTING=0` and `KICAD_FINALIZE_RIP=0` set in the environment

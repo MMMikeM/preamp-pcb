@@ -154,7 +154,13 @@ def hz_run(B, net, since):
     near = unary_union([g for n, g, k, o in B.copper('F.Cu') if bd.is_hz(n)]).buffer(HZ_NEAR)
     own = unary_union([Point(p['x'], p['y']).buffer(OWN_PAD) for p in B.pads if p['net'] == net])
     return sum(g.intersection(near).difference(own).length for g in mine)
+def wanders(B, net):
+    """(too long, length, shortest tree) of a net that was allowed off the top layer"""
+    t = tree_len([(p['x'], p['y']) for p in B.pads if p['net'] == net and not checks.is_tp(p)])
+    L = sum(math.dist((x['x1'], x['y1']), (x['x2'], x['y2'])) for x in B.segs if x['net'] == net)
+    return L > max(L3_RATIO * t, t + L3_EXTRA), L, t
 def route_signals(nets):
+    """Returns (nets still open, nets routed too long): what the passes could not put right."""
     before = {x['uuid'] for x in bd.Board(BOARD).segs}; count('2e pass 1 nets (top only)', len(nets))
     router(nets, ['F.Cu'], ['--via-cost', '100000'])                       # pass 1: top only; nets that do not fit stay open
     t_judge = time.perf_counter()
@@ -185,18 +191,28 @@ def route_signals(nets):
     B = bd.Board(BOARD); left = [n for n in again if checks.top_incomplete(B, n)]
     for n in again:                                                           # an L3-only join that had to wander round earlier nets is thrown away: pass 3 may cross with a via instead
         if n in left: continue
-        pts = [(p['x'], p['y']) for p in B.pads if p['net'] == n and not checks.is_tp(p)]; t = tree_len(pts)
-        L = sum(math.dist((x['x1'], x['y1']), (x['x2'], x['y2'])) for x in B.segs if x['net'] == n)
-        if L > max(L3_RATIO * t, t + L3_EXTRA):
+        far, L, t = wanders(B, n)
+        if far:
             B.remove([x['uuid'] for x in B.segs if x['net'] == n and x['uuid'] not in mark]); left.append(n); count('2e L3-only joins that wandered'); print(f'  {n}: L3-only join wandered ({L:.0f} mm for a {t:.0f} mm tree), redone in pass 3')
     B.save(BOARD)
     print('  pass 3 (router may add its own vias):', left)
     held = {x['uuid'] for x in B.segs + B.vias}
     count('2e pass 3 nets (router vias allowed)', len(left))
-    if left:                                                                  # pass 3 keeps wider gaps so it cannot bring back the squeezes pass 1 was rejected for
+    def pass3(some):                                                          # pass 3 keeps wider gaps so it cannot bring back the squeezes pass 1 was rejected for
         nc = json.load(open(os.path.join(HERE, 'net_clearances.json'))); wide = os.path.join(WORK, '2e_pass3_clearances.json')
         json.dump({k: (HZ_NEAR if bd.is_hz(k) else v) for k, v in nc.items()}, open(wide, 'w'))
-        router(left, ['F.Cu', 'In2.Cu'], ['--layer-costs', '1.0', '1.2', '--via-cost', '150', '--clearance', '0.3'], clearances=wide)
+        router(some, ['F.Cu', 'In2.Cu'], ['--layer-costs', '1.0', '1.2', '--via-cost', '150', '--clearance', '0.3'], clearances=wide)
+    if left: pass3(left)
+    # in a shared call the router's own ordering decides who gets the ground; a net that came out open or wandering gets a call to itself
+    B = bd.Board(BOARD); state = lambda B, n: (not checks.top_incomplete(B, n) and not wanders(B, n)[0], not checks.top_incomplete(B, n), -wanders(B, n)[1])
+    alone = sorted([n for n in left if not state(B, n)[0]], key=lambda n: wanders(B, n)[2])
+    for n in alone:
+        B = bd.Board(BOARD); was = state(B, n); shutil.copy(BOARD, BOARD + '.shared')
+        B.remove([x['uuid'] for x in B.segs + B.vias if x['net'] == n and x['uuid'] not in held]); B.save(BOARD)
+        pass3([n]); B = bd.Board(BOARD); now = state(B, n); far, L, t = wanders(B, n)
+        if now < was: shutil.copy(BOARD + '.shared', BOARD)
+        count('2e pass 3 nets routed again alone'); print(f"  {n} alone: {'joined' if now[1] else 'open'}, {L:.0f} mm for a {t:.0f} mm tree" + ('; worse than in the shared call, which is kept' if now < was else ''))
+    if os.path.exists(BOARD + '.shared'): os.remove(BOARD + '.shared')
     B = bd.Board(BOARD); crept = [n for n in left if hz_run(B, n, held) > HZ_RUN]         # the retry at standard clearances is free to hug high-impedance copper
     if crept:
         B.remove([x['uuid'] for x in B.segs + B.vias if x['net'] in crept and x['uuid'] not in held]); B.save(BOARD)
@@ -207,6 +223,10 @@ def route_signals(nets):
         count('2e pass 4 nets', len(left)); count('2e pad vias', len(added))
         print(f'  pass 4 (pad vias again + L3): {left} | {len(added)} pad vias, {len(failed)} still blocked')
         router(left, ['In2.Cu'], ['--via-cost', '100000'])
+    B = bd.Board(BOARD); still_open = [n for n in nets if checks.top_incomplete(B, n)]; long = {n: wanders(B, n) for n in nets if n not in still_open and wanders(B, n)[0]}
+    for n in still_open: print(f'  {n}: still open')
+    for n, (_, L, t) in long.items(): print(f'  {n}: {L:.0f} mm for a {t:.0f} mm tree, over the limit for a net off the top layer')
+    count('2e nets left open', len(still_open)); count('2e nets left too long', len(long)); return still_open, sorted(long)
 
 def run_step(s, src):
     links = [PY, os.path.join(HERE, 'neighbour_links.py'), BOARD, BOARD, '--json', os.path.join(WORK, f'{s}_links.json')]
@@ -228,7 +248,9 @@ def run_step(s, src):
         router(bias, ['In2.Cu', 'In4.Cu'], ['--layer-costs', os.environ.get('BIAS_L3_COST', '2.0'), '1.0', '--via-cost', '40', '--track-width', '0.4',
                                             '--direction-preference-cost', '1000'], clearances=nc)
     elif s == '2e':
-        B = bd.Board(BOARD); later = mirror_route.waits_for_copy(B); route_signals([n for n in open_signals(B) if n not in later])
+        B = bd.Board(BOARD); later = mirror_route.waits_for_copy(B); still_open, long = route_signals([n for n in open_signals(B) if n not in later])
+        # every one of these nets has now been attempted, so one left open or wandering is this step's failure, not something for the final check to find
+        if still_open or long: raise StepFailed(f'2e left {len(still_open)} net(s) open {still_open} and {len(long)} too long {long}')
     elif s == '2h': sh([PY, os.path.join(HERE, 'mirror_route.py'), BOARD, BOARD, '--json', os.path.join(WORK, '2h_mirror.json')])
     elif s == '2i':
         sh(links); route_hz(open_hz(bd.Board(BOARD))); route_signals(open_signals(bd.Board(BOARD)))
