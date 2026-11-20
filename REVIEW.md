@@ -87,13 +87,19 @@ What is already known about speed:
   Clearance, edge and connectivity checks together take about 0.2 s. That check runs at the end of every step from 2b on.
 
 ## State
-- Placement: second-pass landscape, on the board and committed (d0408b9). Only the hand-routed gate nets are routed on it.
-- On that placement, steps setup to 2d pass with no must-fix items: both supply rails connected, 68 vias, no clearance errors.
-- Step 2e has not completed cleanly on it. Two runs ended with one earlier-step net open each (/Neck/SB, then /Neck/GB) because
-  the router ripped copper from earlier steps (problem 1). A third run, with `guard` added, was interrupted before it finished.
-- On the first-pass landscape placement, before the rip problem showed, 2e connected every neck and shared net with no
-  clearance errors.
-- Steps 2h, 2i and 2f have not been run on the landscape board.
+- Placement: second-pass landscape, on the board and committed in the KiCad repo (d0408b9). Only the hand-routed gate nets are
+  routed on it. That board is not in this repo.
+- **Nothing in this commit has run on the landscape board.** The results below it are from before the locking, the `guard`
+  check, the zone check, the shift read from the board and the removal of 2d's own supply links:
+  - steps setup to 2d passed with no must-fix items (both supply rails connected, 68 vias, no clearance errors);
+  - step 2e did not complete cleanly: two runs ended with one earlier-step net open each (/Neck/SB, then /Neck/GB) because
+    the router ripped copper from earlier steps (problem 1);
+  - steps 2h, 2i and 2f were never run.
+- What has run on this commit: the 38 tests, and steps setup, 2a, 2b, 2c, 2e and 2h on the 19 Nov portrait placement
+  (`tests/board_placed_19nov.kicad_pcb`) with router v0.24.1, all with no must-fix items. Step 2d cannot run on that
+  placement, because supply5's zone shapes are for the landscape board.
+- Next: run setup to 2f on the landscape board. First things to look at: that `board.channel_shift` gives 52.45, that 2d
+  passes `zone_integrity`, and that no router call fails in `guard`.
 
 ## Known problems, most important first
 1. **The router rips earlier copper.** With `KICAD_RIP_PREEXISTING=0` and `KICAD_FINALIZE_RIP=0` set in the environment
@@ -132,6 +138,12 @@ What is already known about speed:
    call uses standard clearances.
 8. **The V+ crossing in supply5 is now tested against other copper before it is placed** and moves to the next landing position
    if it does not fit, but `supply5.run` itself has never been run on any board from this tree.
+
+9. **/Neck/SVP takes 33 mm for a 10.7 mm tree** on the 19 Nov portrait placement, and 2h copies the loop to the bridge. C114's
+   SVP_I pad sits between C114.1 and U6.3 with a 0.85 mm gap to the U6 pins; a 0.2 mm track at 0.4 mm clearance needs 1.0 mm.
+   Routing order does not help (30 mm routed last, 18 mm routed alone, which then leaves SVN open). Turning C114 round would
+   fix it. Left as it is by decision. Step 2a has no too-long test, so it is not reported, and the locked loop blocks some
+   later nets. `land/build.py` moved U6 and the servo block together, so the landscape board probably has it too: not checked.
 
 ## Questions for the reviewer
 1. Answered: a third rip switch, plus locking; see problem 1.
