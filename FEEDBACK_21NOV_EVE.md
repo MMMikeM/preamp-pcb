@@ -43,3 +43,15 @@ reverse order joins both.
 - The author may rename the hand-swap parts to their own prefix (RS101/RS102, RS201/RS202) so they stand out. Your code
   finds them by description, so nothing should depend on it; the fixtures would keep the R names.
 - `compare_channels.py` splitting by part name (your point D) is still on our side.
+
+## Addendum (late evening): first full DRC of a routed board
+Kicad commit `ce57ab2`: the author's board after the RS renaming (hand-swap parts are now RS101/RS102/RS201/RS202) and a
+courtyard tidy, routed with this branch at `e4781c5`, supply on. KiCad DRC with zones refilled and schematic parity:
+**0 unconnected, parity clean, 7 items left**, two of them yours:
+1. **A dangling via on `/Neck/CLD`** (F.Cu to B.Cu, joins nothing). Worth a check in 2i that drops a via with copper on
+   only one layer.
+2. **J105/J205 (aux ground holes) were unconnected.** Their footprint has zone connection "none" (the corner leaves no
+   room for spokes), so the pour does not reach them and nothing routes GND. They need a 0.4 mm top-layer link to the
+   pickup ground pad J104/J204 directly above. The author's board now has those two links by hand. Suggested: in setup,
+   any GND pad with zone connection none gets a link to the nearest GND pad, or at least a must-fix if it is left open.
+The rest are the author's (wire-pad courtyards, the underside legend).
