@@ -47,14 +47,9 @@ def plan(B, src='1'):
     return todo, skipped, T
 
 def waits_for_copy(B, src='1'):
-    """Nets to leave unrouted until the copy is made: the twins it will fill, and the other channel's own nets, which the
-    copy has to fit around if they are routed first."""
-    wait = {t['twin'] for t in plan(B, src)[0]}; refs = {}
-    for p in B.pads:
-        if p['net'] and not p['ref'].startswith('TP'): refs.setdefault(p['net'], []).append(p['ref'])
-    for net, rs in refs.items():
-        if net not in bd.GROUND and not bd.is_supply(net) and any(is_dst(r, src) for r in rs) and not any(is_src(r, src) for r in rs): wait.add(net)
-    return wait
+    """Nets to leave unrouted until the copy is made: the twins it will fill. The other channel's own nets are routed with this
+    channel's in each step, so a placement where the strips do not line up is not routed one channel after the other."""
+    return {t['twin'] for t in plan(B, src)[0]}
 
 def blocker(B, twin, segs, vias):
     """what a copy onto the twin net would crowd, or None; the twin's present routing does not count, it is replaced"""

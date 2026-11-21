@@ -1,3 +1,40 @@
+# route6: reviewer feedback (22 Nov 2026, third)
+
+Follows `a81a437`; the earlier parts of this file are unchanged below.
+
+## The bridge is no longer a copy of the neck, so nothing waits for one
+On `509fb5a` only 7 of 52 neck/bridge part pairs sit at a shifted or mirrored position (rev06 had 38, eacfa31 45), and
+there is no common offset for the rest: your rework moved the bridge strip on its own. 2h copies 1 net of 33. So:
+- **Partial copy, and moving bias tracks out of a copy's way, are dropped.** Both would gain almost nothing on this board.
+- **2a, 2p, 2b and 2e now hold back only the nets 2h will actually copy.** Before, every bridge net with no neck twin also
+  waited, so on `509fb5a` almost the whole bridge was routed last, in 2i.
+
+| Supply on | Neck | Bridge | 2h copies |
+|---|---|---|---|
+| `509fb5a`, before | 444 mm, 16 vias | 448 mm, 15 vias | 1 |
+| `509fb5a`, now | 444 mm, 16 vias | **435 mm, 11 vias** | 1 |
+| rev06, before | 428 mm, 13 vias | 410 mm, 16 vias | 14 |
+| rev06, now | 428 mm, 13 vias | 410 mm, 16 vias | 13 |
+
+On `509fb5a`, `/Bridge/GB` drops from 30.3 to 21 mm, back inside the top-layer limit. On rev06, where the strips still line
+up, the bridge's own nets now go in before the copy and cost it one net: `/Bridge/DB` was copied (12 mm, no vias) and is now
+routed in 2i (17 mm, 3 vias), while `/Bridge/OBN` loses 3 vias. If you ever make the strips copies again, that trade is
+worth a second look.
+
+## Smaller items
+- **Bias cost.** `BIAS_L3_COST=2.0` on `509fb5a` moves 14 mm of bias from L3 to L5 for 3 more bias vias; signals barely
+  move (neck 444 -> 447 mm, one via fewer; bridge 448 -> 447). Nothing to gain; keep 1.0.
+- **Speed.** The via check is cached per net and board, so 2e and 2i stop checking the same board twice; `toplink` skips
+  its second search when the first proved the target unreachable; the high-impedance keep-away and the pad index used by
+  the squeeze test are built once per board state. Same boards at every step; a `509fb5a` run goes from 133 to 120 s.
+- **Flagged vias.** On `509fb5a` only `/BAT-` is left, by design. The rev06 and eacfa31 ones are gone with the boards.
+
+## Left
+- 2f, once the test points are back.
+- Yours: `compare_channels.py` by part name and board origin from the outline; the test points; `Net-(Q103-B)`.
+
+---
+
 # route6: reviewer feedback (22 Nov 2026, second)
 
 Reply to `FEEDBACK_21NOV_EVE.md`. The earlier part of this file (the split-plane supply) is unchanged below.

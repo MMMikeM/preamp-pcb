@@ -20,16 +20,16 @@ failed stays in `work/<step>.kicad_pcb` to look at. A board with arc tracks is r
   classes from the `.kicad_pro` beside the board to `work/net_classes.json`.
 - `2p` routes the front-end (P2_FrontEnd) and second-stage (P4_Stage2) nets on the top layer with no vias, before `2b`'s
   links can take their way: drains first, then the second stage, then the rest of the front end, a router call each. A net
-  is kept only if it joins and passes 2e's pass-1 judging; the rest is left for `2e`. Unlike the other early steps it also
-  routes the other channel's own nets.
+  is kept only if it joins and passes 2e's pass-1 judging; the rest is left for `2e`.
 - `2d` adds no top-layer supply links of its own: `2b` has already joined supply pads up to 4 mm apart. It drops the supply
   vias, then lays one V+ and one V- zone on L5 from the router's split plane (`route_planes.py`, the "spine split"): GND
   stays the layer's background, and each rail's zone is grown round its own pads and vias and joined by corridors laid so
   the two never cross. Nothing is placed by coordinates. The battery and bias nets are routed after the zones, and
   `zone_integrity` fails the step if one cuts a zone. `R6_SKIP_SUPPLY=1` leaves the zones out, for comparing signal
   routing between placements. `via_justify.py` judges V+, V- and the bias nets by 2b's limits.
-- `2a`, `2b` and `2e` leave the other channel alone (`2p`'s nets aside): `2h` then copies one channel onto it, skipping any net whose copy would
-  collide with copper that is staying, and `2i` routes whatever the copy did not cover.
+- `2a`, `2p`, `2b` and `2e` leave alone only the nets `2h` will copy, and route everything else on both channels. `2h` then
+  copies those nets, skipping any whose copy would collide with copper that is staying, and `2i` routes whatever the copy
+  did not cover.
 - `2f` puts a via in each loose test point where one fits and has the router reach the rest by a track.
 
 ## The router (KiCadRoutingTools)

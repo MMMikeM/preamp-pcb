@@ -13,34 +13,43 @@ def is_decap(B, pad):
 
 def leaves_top(piece): return bool(piece['vias']) or any(p['drill'] for p in piece['pads'])
 
+_SEEN = {}
 def check(B, max_gap=MAX_GAP, include_gnd=False, include_decaps=False, nets=None, width=0.2):
+    # a step checks the same board twice (2e/2i before their retry, then the step's own checks), and each net's answer depends only on the board
+    key = (hash(B.text), max_gap, include_decaps, width, tl.LIMIT_BEATS_KEEP_AWAY, nl.MAX_GAP, nl.RATIO, nl.EXTRA)
     flags = []
     for net in (nets or B.nets):
         if net in bd.GROUND and not include_gnd: continue
-        comps = tl.components(B, net)
-        if len(comps) < 2: continue
-        on_l5 = net in bd.RAILS | bd.BIAS; reach, ratio, extra = (min(max_gap, nl.MAX_GAP), nl.RATIO, nl.EXTRA) if on_l5 else (max_gap, RATIO, EXTRA)
-        cand = []
-        for a, b in itertools.combinations(range(len(comps)), 2):
-            A, C = comps[a], comps[b]
-            if not include_decaps and bd.is_supply(net) and any(len(c['pads']) == 1 and not c['segs'] and is_decap(B, c['pads'][0]) for c in (A, C)): continue
-            if not (leaves_top(A) or leaves_top(C)): continue           # nothing to justify: an unfinished net, which the connectivity check reports
-            g, pa, pb = tl.gap(A, C)
-            if g <= reach: cand.append((g, a, b, pa, pb))
-        par = list(range(len(comps)))
-        def f(i):
-            while par[i] != i: par[i] = par[par[i]]; i = par[i]
-            return i
-        for g, a, b, pa, pb in sorted(cand):
-            if f(a) == f(b): continue                      # already explained by a shorter flagged link
-            lim = max(ratio * g, g + extra)
-            r = tl.top_path(B, net, comps[a], comps[b], width, max_len=lim)
-            if r and r[0] <= lim:
-                par[f(a)] = f(b)
-                flags.append(dict(net=net, a=pa[2], b=pb[2], at=[round(pa[0], 2), round(pa[1], 2)], to=[round(pb[0], 2), round(pb[1], 2)],
-                                  gap=round(g, 2), top_path=round(r[0], 2), limit=round(lim, 2),
-                                  vias=[[round(v['x'], 2), round(v['y'], 2)] for c in (comps[a], comps[b]) for v in c['vias']],
-                                  path=[[round(x, 3), round(y, 3)] for x, y in r[1]]))
+        if (key, net) not in _SEEN: _SEEN[(key, net)] = net_flags(B, net, max_gap, include_decaps, width)
+        flags += _SEEN[(key, net)]
+    return flags
+
+def net_flags(B, net, max_gap, include_decaps, width):
+    flags = []
+    comps = tl.components(B, net)
+    if len(comps) < 2: return flags
+    on_l5 = net in bd.RAILS | bd.BIAS; reach, ratio, extra = (min(max_gap, nl.MAX_GAP), nl.RATIO, nl.EXTRA) if on_l5 else (max_gap, RATIO, EXTRA)
+    cand = []
+    for a, b in itertools.combinations(range(len(comps)), 2):
+        A, C = comps[a], comps[b]
+        if not include_decaps and bd.is_supply(net) and any(len(c['pads']) == 1 and not c['segs'] and is_decap(B, c['pads'][0]) for c in (A, C)): continue
+        if not (leaves_top(A) or leaves_top(C)): continue           # nothing to justify: an unfinished net, which the connectivity check reports
+        g, pa, pb = tl.gap(A, C)
+        if g <= reach: cand.append((g, a, b, pa, pb))
+    par = list(range(len(comps)))
+    def f(i):
+        while par[i] != i: par[i] = par[par[i]]; i = par[i]
+        return i
+    for g, a, b, pa, pb in sorted(cand):
+        if f(a) == f(b): continue                      # already explained by a shorter flagged link
+        lim = max(ratio * g, g + extra)
+        r = tl.top_path(B, net, comps[a], comps[b], width, max_len=lim)
+        if r and r[0] <= lim:
+            par[f(a)] = f(b)
+            flags.append(dict(net=net, a=pa[2], b=pb[2], at=[round(pa[0], 2), round(pa[1], 2)], to=[round(pb[0], 2), round(pb[1], 2)],
+                              gap=round(g, 2), top_path=round(r[0], 2), limit=round(lim, 2),
+                              vias=[[round(v['x'], 2), round(v['y'], 2)] for c in (comps[a], comps[b]) for v in c['vias']],
+                              path=[[round(x, 3), round(y, 3)] for x, y in r[1]]))
     return flags
 
 if __name__ == '__main__':

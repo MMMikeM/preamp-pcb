@@ -80,7 +80,7 @@ def top_path(B, net, A, Bc, width, margin=3.0, layer='F.Cu', max_len=None):
         on_grid = 0 <= si < nx and 0 <= sj < ny and abs(xs[si] - p[0]) < 1e-6 and abs(ys[sj] - p[1]) < 1e-6
         if on_grid and not blocked[si, sj]: src.append((si, sj))   # the track's end cap sits on the anchor, so the anchor must be legal too
     if not src: return None
-    keep_away = soft & ~own; INF = 1e18; cap = max_len if max_len is not None else INF
+    keep_away = soft & ~own; INF = 1e18; cap = max_len if max_len is not None else INF; unreachable = []
     def search(penalised):
         dist = {}; prev = {}; pq = []
         for s in src:
@@ -101,6 +101,7 @@ def top_path(B, net, A, Bc, width, margin=3.0, layer='F.Cu', max_len=None):
                 nc = c + step + (TURN * turn if c > 0 else 0) + (HZ_COST * step if penalised and keep_away[a, b] else 0)
                 if nc < dist.get((a, b, nd), INF) - 1e-12:
                     dist[(a, b, nd)] = nc; prev[(a, b, nd)] = (i, j, d); heapq.heappush(pq, (nc, a, b, nd))
+        else: unreachable.append(penalised)                       # the queue ran dry before the cut-off: no path at any cost
         if end is None: return None
         cells = [end]
         while cells[-1] in prev: cells.append(prev[cells[-1]])
@@ -118,7 +119,8 @@ def top_path(B, net, A, Bc, width, margin=3.0, layer='F.Cu', max_len=None):
     # The search minimises cost, so the keep-away can push it onto a path over the limit, or past the cut-off above,
     # while a shorter legal path exists. Only then is the keep-away dropped.
     too_long = max_len is not None and (best is None or best[0] > max_len)
-    if too_long and LIMIT_BEATS_KEEP_AWAY and keep_away.any():
+    # the keep-away changes costs, not which cells can be reached, so a target the first search could not reach at all stays out of reach
+    if too_long and LIMIT_BEATS_KEEP_AWAY and keep_away.any() and not unreachable:
         direct = search(penalised=False)
         if direct and (best is None or direct[0] < best[0]): best = direct
     return best

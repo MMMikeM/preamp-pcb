@@ -368,3 +368,7 @@ def test_a_gate_reorder_that_does_not_help_leaves_the_first_attempt(bare, work, 
     _order_sensitive_router(bare, work, monkeypatch, blocker=a, blocked=b, always=True)
     stage_route.route_hz([a, b])
     B = bd.Board(stage_route.BOARD); assert not checks.top_incomplete(B, a) and checks.top_incomplete(B, b)
+def test_only_the_nets_the_copy_will_fill_wait_for_it(bare):
+    wait = mirror_route.waits_for_copy(bare); twins = {t['twin'] for t in mirror_route.plan(bare)[0]}
+    own = [n for n in bare.nets if bd.is_signal(n) and ends(bare, n) and all(mirror_route.is_dst(p['ref'], '1') for p in ends(bare, n)) and n not in twins]
+    assert wait == twins and own and not set(own) & wait                                 # the bridge's own nets are routed with the neck's, not left to 2i

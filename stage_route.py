@@ -12,9 +12,8 @@
     python stage_route.py check  # report only; add --final to also fail on unconnected nets and unjustified vias
 A step exits 1 if a script or the router it runs exits non-zero, or if a must-fix check is not empty. It then puts
 work/board.kicad_pcb back to what it was before the step; the result that failed stays in work/<step>.kicad_pcb to look at.
-Steps 2a, 2b and 2e leave alone the nets that 2h will make by copying, and the other channel's own nets: routed first they
-are only in the copy's way. 2i routes them afterwards. 2p is the exception: it routes the other channel's own front-end and
-second-stage nets too, so they are never left to the last step.
+Steps 2a, 2p, 2b and 2e leave alone the nets that 2h will make by copying; everything else on both channels is routed in
+its class's step. 2i routes what the copy did not cover.
 With ROUTER_DIR set, every step also gets a second opinion from the router's own DRC and connectivity check (krt_checks.py).
 2g (tidy) is manual review for now. WORK defaults to ./work/board.kicad_pcb; every step keeps work/<step>.kicad_pcb as well.
 The router is KiCadRoutingTools (not included): set ROUTER_DIR to its checkout. Steps 2b, 2c, 2h, check and setup do not need it."""
@@ -22,6 +21,7 @@ import sys, os, subprocess, shutil, argparse, json, math, time, re, contextlib, 
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import board as bd, toplink as tl, checks, krt_checks, mirror_route, drops, via_justify, hand_access
 from shapely.geometry import LineString, Point
+from shapely.strtree import STRtree
 from shapely.ops import unary_union
 WORK = os.environ.get('R6_WORK') or os.path.join(HERE, 'work'); BOARD = os.path.join(WORK, 'board.kicad_pcb')
 PY = sys.executable
@@ -192,13 +192,18 @@ def length_and_tree(B, net):
     """(track length, shortest tree through the pads) of a net, test points aside"""
     return (sum(math.dist((x['x1'], x['y1']), (x['x2'], x['y2'])) for x in B.segs if x['net'] == net),
             tree_len([(p['x'], p['y']) for p in B.pads if p['net'] == net and not checks.is_tp(p)]))
+def per_board(B, key, make):
+    """make(B), worked out once for each state of the board: every edit re-parses it into a new text"""
+    memo = B.__dict__.setdefault('_memo', {}); hit = memo.get(key)
+    if hit is None or hit[0] is not B.text: hit = memo[key] = (B.text, make(B))
+    return hit[1]
 def new_top_lines(B, net, since): return [LineString([(x['x1'], x['y1']), (x['x2'], x['y2'])]) for x in B.segs if x['net'] == net and x['uuid'] not in since and x['layer'] == 'F.Cu']
 def hz_run(B, net, since):
     """mm of the net's top-layer track newer than `since` that lies within HZ_NEAR of high-impedance copper.
     The approach to its own pads does not count: a servo net has to end beside the servo inputs."""
     mine = new_top_lines(B, net, since)
     if not mine: return 0.0
-    near = unary_union([g for n, g, k, o in B.copper('F.Cu') if bd.is_hz(n)]).buffer(HZ_NEAR)
+    near = per_board(B, 'hz_near', lambda B: unary_union([g for n, g, k, o in B.copper('F.Cu') if bd.is_hz(n)]).buffer(HZ_NEAR))
     own = unary_union([Point(p['x'], p['y']).buffer(OWN_PAD) for p in B.pads if p['net'] == net])
     return sum(g.intersection(near).difference(own).length for g in mine)
 def squeezed(B, net, since):
@@ -206,7 +211,9 @@ def squeezed(B, net, since):
     mine = new_top_lines(B, net, since)
     wid = max([x['w'] for x in B.segs if x['net'] == net and x['uuid'] not in since] or [0.2])
     own_refs = {p['ref'] for p in B.pads if p['net'] == net}                    # the other pad of a part the net ends on is not a squeeze
-    pinch = [checks.label(p) for p in B.pads if p['net'] != net and p['ref'] not in own_refs and 'F.Cu' in p['layers'] and mine and min(g.distance(B.pad_geom(p)) for g in mine) - wid / 2 < PINCH]
+    pads, tree = per_board(B, 'top_pads', lambda B: (lambda P: (P, STRtree([B.pad_geom(p) for p in P])))([p for p in B.pads if 'F.Cu' in p['layers']]))
+    close = {id(pads[int(i)]) for g in mine for i in tree.query(g, predicate='dwithin', distance=PINCH + wid / 2)}
+    pinch = [checks.label(p) for p in B.pads if id(p) in close and p['net'] != net and p['ref'] not in own_refs and min(g.distance(B.pad_geom(p)) for g in mine) - wid / 2 < PINCH]
     under = {r for r in {x.split('.')[0] for x in pinch} if len(B.fps[r]['pads']) == 2 and sum(x.split('.')[0] == r for x in pinch) == 2}   # passing under a two-pad part between its pads is allowed
     return [x for x in pinch if x.split('.')[0] not in under]
 def judge_top(B, net, since):
@@ -363,7 +370,7 @@ def run_step(s, src):
     elif s == '2p':
         # before 2b, so a neighbour link (a supply link above all) routes round these nets instead of through their way. The rest of the
         # front end goes last: the sources sit on a low-impedance resistor ladder and can take a via
-        B = bd.Board(BOARD); cl = net_classes(); copies = {t['twin'] for t in mirror_route.plan(B)[0]}
+        B = bd.Board(BOARD); cl = net_classes(); copies = mirror_route.waits_for_copy(B)
         of = lambda c: [n for n in B.nets if n not in copies and checks.top_incomplete(B, n) and any(fnmatch.fnmatchcase(n, p) for p in cl.get(c, []))]
         drain = lambda n: n.split('/')[-1] in ('DA', 'DB')
         for label, group in (('2p drains', [n for n in of('P2_FrontEnd') if drain(n)]), ('2p stage 2', of('P4_Stage2')),
