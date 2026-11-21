@@ -4,6 +4,7 @@ from shapely.geometry import Point, box
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, os.path.dirname(HERE))
 import board as bd, toplink as tl, via_justify, neighbour_links, drops, checks, setup6, mirror_route, stage_route, krt_checks
 OLD = os.path.join(HERE, 'board_4layer_rev1.kicad_pcb'); NEW = os.path.join(HERE, 'board_placed_19nov.kicad_pcb')
+LAND = os.path.join(os.path.dirname(HERE), 'fixtures', 'landscape-74f5949', 'humbucker-preamp.kicad_pcb')
 
 @pytest.fixture(scope='module')
 def _bare():
@@ -228,6 +229,28 @@ def test_copy_report_marks_a_net_the_other_channel_already_has(bare):
     done = len([p for p in bare.pads if p['net'] == '/Bridge/SB' and not checks.is_tp(p)]) == 2
     s = next(s for s in mirror_route.run(bare, dry=True)[1] if s['net'] == '/Neck/SB')
     assert ('already_routed_as' in s) == done
+# On the landscape fixture the neck's U3 uses op-amp units B and C swapped: on pins 5 to 10, U3 pin n carries what U4 pin 15 - n does
+SWAPPED = {'Net-(Q103-C)': 'Net-(Q203-C)', '/Neck/BO': '/Bridge/BO', '/Neck/OBN': '/Bridge/OBN', 'Net-(U3B--)': 'Net-(U4B--)'}
+def test_a_net_on_the_swapped_op_amp_pins_is_never_copied():
+    B = bd.Board(LAND); net = lambda ref, num: next(p['net'] for p in B.pads if p['ref'] == ref and p['num'] == num)
+    assert [net('U3', n) for n in '6789'] == list(SWAPPED) and [net('U4', n) for n in '9876'] == list(SWAPPED.values())
+    copied = lambda src='1': {x for t in mirror_route.plan(B, src)[0] for x in (t['net'], t['twin'])}
+    assert not (copied('1') | copied('2')) & (set(SWAPPED) | set(SWAPPED.values()))
+    shift = bd.channel_shift(B); at = {(p['ref'], p['num']): p for p in B.pads}
+    for p in B.pads:                                                                    # the bridge as an exact shifted copy of the neck: only the swap can stop a copy now
+        m = re.match(r'([A-Z]+)2(\d\d)$', p['ref']); q = at.get((f'{m[1]}1{m[2]}', p['num'])) if m else None
+        if q: p['x'], p['y'] = q['x'] + shift, q['y']
+    todo = {t['net']: t['twin'] for t in mirror_route.plan(B)[0]}
+    assert not set(todo) & set(SWAPPED) and all(todo.get(n) == n.replace('/Neck/', '/Bridge/') for n in ('/Neck/OA', '/Neck/DA', '/Neck/DB', '/Neck/OB'))
+def test_copy_report_pairs_the_swapped_op_amp_nets_by_function_not_by_pin():
+    B = bd.Board(LAND)
+    assert all(mirror_route.other_side(B, a) == {b} and mirror_route.other_side(B, b, '2') == {a} for a, b in SWAPPED.items())
+    def join(net): track(B, net, [(p['x'], p['y']) for p in B.pads if p['net'] == net])
+    report = lambda: {s['net']: s.get('already_routed_as') for s in mirror_route.run(B, dry=True)[1] if s['net'] in SWAPPED}
+    join('/Bridge/OBN')                                                                 # on U4.7, the pin /Neck/BO's U3.7 matches by number
+    assert report() == {'Net-(Q103-C)': None, '/Neck/BO': None, '/Neck/OBN': ['/Bridge/OBN'], 'Net-(U3B--)': None}
+    for n in SWAPPED.values(): join(n)
+    assert report() == {a: [b] for a, b in SWAPPED.items()}
 def _fake_router(B, tmp_path, monkeypatch):
     monkeypatch.setattr(stage_route, 'WORK', str(tmp_path)); monkeypatch.setattr(stage_route, 'BOARD', str(tmp_path / 'board.kicad_pcb')); monkeypatch.setenv('ROUTER_DIR', str(tmp_path))
     B.save(stage_route.BOARD); calls = []
@@ -245,3 +268,26 @@ def test_add_only_locks_the_given_nets_own_copper_for_the_call(linked, tmp_path,
     stage_route.router([n], ['F.Cu']); assert n not in calls[0][1]
     stage_route.router([n], ['F.Cu'], add_only=True); assert n in calls[1][1]
     assert not any(x['locked'] for x in bd.Board(stage_route.BOARD).segs if x['net'] == n)
+def test_top_first_keeps_only_nets_that_join_within_the_rules(bare, tmp_path, monkeypatch):
+    monkeypatch.setattr(stage_route, 'WORK', str(tmp_path)); monkeypatch.setattr(stage_route, 'BOARD', str(tmp_path / 'board.kicad_pcb')); monkeypatch.setenv('ROUTER_DIR', str(tmp_path))
+    def ends(n): return [p for p in bare.pads if p['net'] == n and not checks.is_tp(p)]
+    two = [n for n in bare.nets if not bd.is_hz(n) and not bd.is_supply(n) and n != 'GND' and len(ends(n)) == 2 and math.dist(*[(p['x'], p['y']) for p in ends(n)]) < 5]
+    def fits(n):
+        B = copy.deepcopy(bare); a, b = ends(n); track(B, n, [(a['x'], a['y']), (b['x'], b['y'])]); return stage_route.judge_top(B, n, {x['uuid'] for x in bare.segs})
+    good = next(n for n in two if fits(n) is None); detour, still = [n for n in two if n != good][:2]
+    bare.save(stage_route.BOARD)
+    def run(cmd, cwd):                                                                  # joins one net straight, one by a long detour, and leaves one open
+        B = bd.Board(stage_route.BOARD); a, b = ends(good); track(B, good, [(a['x'], a['y']), (b['x'], b['y'])])
+        a, b = ends(detour); track(B, detour, [(a['x'], a['y']), (a['x'], a['y'] - 15), (b['x'], b['y'])]); B.save(stage_route.BOARD + '.tmp'); return dict(returncode=0)
+    monkeypatch.setattr(stage_route, 'run_router', run)
+    stage_route.top_first([good, detour, still], 'test')
+    B = bd.Board(stage_route.BOARD); routed = {s['net'] for s in B.segs}
+    assert good in routed and detour not in routed and still not in routed
+def test_a_neighbour_link_goes_round_a_track_placed_before_it(bare, linked):
+    _, added = linked; x = next(x for x in added if x['net'] == 'V+')
+    a, b = [next(p for p in bare.pads if checks.label(p) == k) for k in (x['a'], x['b'])]
+    mx, my = (a['x'] + b['x']) / 2, (a['y'] + b['y']) / 2; dx, dy = b['x'] - a['x'], b['y'] - a['y']; d = math.hypot(dx, dy)
+    track(bare, 'Net-(Q103-C)', [(mx - 3 * dy / d, my + 3 * dx / d), (mx + 3 * dy / d, my - 3 * dx / d)])   # straight across the direct link
+    crowded = checks.clearances(bare); again = neighbour_links.run(bare, nets=['V+'], log=lambda *_: None)
+    assert checks.clearances(bare) == crowded
+    assert all(y['length'] > x['length'] + 0.5 for y in again if {y['a'], y['b']} == {x['a'], x['b']})

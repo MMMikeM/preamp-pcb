@@ -1,62 +1,70 @@
-# route6: reviewer feedback (20 Nov 2026, second round)
+# route6: reviewer feedback (21 Nov 2026)
 
-Reply to the landscape run feedback (`landscape_runs.zip`). The reply to the five bridge-run points and the twelve
-questions is in git (`7696024`). How to run the pipeline is in `README.md`.
+Reply to `FEEDBACK_21NOV.md`. Earlier rounds are in git (`0eced4c` and before). How to run the pipeline is in `README.md`.
 
-## What this is based on
-- Router: KiCadRoutingTools tag v0.24.1 (`31049fd`).
-- Board: `humbucker-preamp.kicad_pcb` at `25a2cbd`, with its `.kicad_pro`, now on the reviewer's machine.
-- My run of setup to 2e on `7696024` matched `workR` exactly: the same track and via counts at 2b, 2c and 2d, and the same
-  2e result (OB open, CLD 99 mm, OA 32 mm alone). The router is deterministic. The CLD lengths of 53, 61, 99 and 50 mm came
-  from different commits and placements, so read them as sensitivity to small changes elsewhere, not as noise.
-- 42 tests pass with `ROUTER_DIR` set.
+## Basis
+- Router: KiCadRoutingTools v0.24.1 (`31049fd`).
+- Board: `fixtures/landscape-74f5949`, run setup to 2i with `R6_SKIP_SUPPLY=1` and `BIAS_L3_COST=1.0`. 2i fails only on V+
+  and V-, as expected with supply skipped.
+- 46 tests pass with `ROUTER_DIR` set.
 
-## Fixed
-### `/Neck/OB` open at R121.1: the retry was not at standard clearances
-Pass 3 calls the router with `--clearance 0.3` as well as the widened clearance file. The retry for nets left open only
-went back to the standard file and kept `--clearance 0.3`. Routed alone at the real standard clearances on the failed
-board, OB joins at 46 mm for a 32 mm tree. Q103-C, which holds L3 where OB ran in 2i, was not the cause: removing it did
-not change the result. The retry now drops `--clearance` too, and with that 2e joins OB.
+## The U3/U4 unit swap: nothing maps it wrongly
+Checked every place that pairs one channel with the other, by running it on the fixture:
+- `mirror_route.plan` (2h's copy) pairs pads by position and copies a net only if every pad lands on one twin net. The four
+  nets on the swapped pins (`Net-(Q103-C)`, `/Neck/BO`, `/Neck/OBN`, `Net-(U3B--)`) are refused both ways. With the bridge
+  made an exact shifted copy of the neck in memory they are still refused, because each lands on two nets, while
+  `/Neck/OA`, `DA`, `DB` and `OB` copy as they should.
+- `other_side` (the "already routed on the other channel" report) maps by pad number, but only between `X1nn` and `X2nn`
+  parts. U3 and U4 never match, and the passives kept their pins. It gives the function twin for all 39 nets, both ways.
+- `waits_for_copy`, `checks.symmetry` and `board.channel_shift` don't look at nets on U3/U4.
 
-New finding 3 (one step beat neck first) can be dropped: the open net in the neck-first runs was this bug.
+Mapping by net name would be wrong here: a copy of Q103-C onto Q203-C would end on U4.6, which is `Net-(U4B--)`. The real
+cost of the swap is that the four bridge nets always wait for 2i. Two tests pin this on the fixture.
 
-### Step 2f failing `guard` on V+
-Reproduced on `workR/2i.kicad_pcb`. The router's own clean-up ("Cycle prune", "Strict collapse") removed V+ scaffold.
-`router(..., add_only=True)` also locks the given nets' earlier copper for the call. The router still routes a net with
-locked copper, so 2f uses it. On the same board, 2f then passes and joins V+, V-, REF and `/Neck/SA` to their test points.
-It is kept to 2f because the router's rescue and rip passes skip locked nets, which could cost completions in 2e and 2i.
+Seen in passing: `channel_shift` gives 52.44 on this placement (10 parts against 9 for 52.45), inside the copy's 0.03 mm
+tolerance.
 
-### A failed step said "must-fix: none"
-The failure now shows inside that field: `must-fix: step failed: 2e left ...`. A script that greps for "none" stops.
+## P2/P4 before supply links: built as step 2p
+`setup -> 2a -> 2p -> 2b -> ...`. 2p routes the P2_FrontEnd and P4_Stage2 nets on the top layer with no vias, in three
+router calls: drains, then the second stage, then the rest of the front end. Copy targets are left to 2h; the bridge's
+untwinned nets are routed here. A net is kept only if it joins and passes the same judging as 2e's pass 1 (length,
+squeeze, high-impedance keep-away, now one function, `judge_top`); the rest is removed and left for 2e. The classes come
+from the `.kicad_pro` beside the source board, which setup saves to `work/net_classes.json`.
 
-### Solo retry falls back to standard clearances, with the squeeze test
-As agreed:
-1. Solo at the pass-3 clearances. Joined within the length limit: kept.
-2. Otherwise solo at standard clearances, starting the net again from its state before the step (its earlier pieces and
-   pad vias were placed for the wider gap and box it in). Kept only if it joins, is within the length limit and is not
-   squeezed (two or more foreign pads within 0.25 mm, a pass under a two-pad part excepted).
-3. Otherwise the step fails, as before.
+Rule 2 (keep supply links 0.4 mm from P2/P4 copper) is not built. With P2/P4 down first, a 2b link can only route round
+them; rule 2 would only widen the gap from 0.2 to 0.4 mm, which a decoupled rail doesn't need, and `via_justify` would then
+flag the vias of every link it refused unless it learned the same rule. A test covers "a link goes round a track placed
+before it".
 
-The shared pass-3 call's own retry at standard clearances is held to the same squeeze test: a squeezed pass-3 route is
-dropped before pass 4.
+### On the fixture, against the same pipeline without 2p
+| | Without 2p | With 2p |
+|---|---|---|
+| Neck signal track / vias | 427 mm / 16 | 425 mm / 15 |
+| Bridge signal track / vias | 436 mm / 19 | 428 mm / 14 |
+| `/Neck/DB` | 18 mm, 2 vias | 12.2 mm, 0 vias |
+| `Net-(Q203-C)` | 14.7 mm, 0 vias | 12.4 mm, 0 vias |
+| Nets copied in 2h | 19 | 19 |
 
-## Where 2e stands on `25a2cbd`
-2e fails on one net. `/Neck/CLD` is 99 mm for a 41 mm tree (limit 74). At standard clearances it routes at 72 mm, but
-squeezed between C302.2 and R120.1, so the fallback refuses it. That is the rule doing its job; CLD needs a hand route or a
-placement change near C302 and R120.
+Costs: `/Bridge/OBN` +6 mm (one via fewer), `/Neck/OB` one via more. Left for 2e by 2p: `Net-(Q103-B)` (41 mm on top for a
+9 mm tree), `Net-(Q103-E)`, `/Bridge/SA` and `/Neck/SB` (too long on top), `/Bridge/SB` (squeezed at Q202).
+
+### Your acceptance check
+R127 and C112 each moved 0.1 mm, setup to 2i: only the nets on those two parts changed (`/OUT_NK`, `/Neck/BO`, a GND
+via). Q203-C and every other net were identical.
+
+## Why Q203-C moved between your runs D and E: not found
+The router is deterministic, so I tested whether one channel's routing can reorder the other's inside a shared router
+call. Three tests say no on this fixture: the R127 nudge without 2p changed only R127's nets; re-routing two neck nets
+inside the shared 2i call changed no bridge net; and 2p with a call per region gave the same board as one call. So I did
+not split calls by region. R127 and C112 are 38 to 41 mm from Q203-C and their nets are not copied, so the copy can't carry
+a change across either. Whatever moved it in E, it is not on this fixture.
+
+## Your branch's code changes
+- Pass 2's L3 join with `add_only=True`: agreed and kept; no completion was lost in any run here.
+- `R6_SKIP_SUPPLY` and `compare_channels.py`: kept, and used for every comparison above.
 
 ## Not done
-- Partial copy (point 3): still the largest gain, not built.
-- Bias tracks blocking the copy (point 2): not built.
-- Five test points stay loose after 2f (`/Bridge/OA`, `/Bridge/SO`, `/Neck/OA`, `/VR`, `PB`): placement, on the author's side.
-- I have not yet run 2h to 2f on my own board with these changes.
-
-## What I would not trust yet
-1. **A widened clearance blocks a net at its own pads.** The retry works round it; it does not cure it.
-2. **supply5's zone shapes are constants** for one placement.
-3. **2e and 2i fail where they used to pass, by design.** The board is rolled back, so the routed result is only in
-   `work/<step>.kicad_pcb`.
-4. **Untested code from the landscape patch:** via sizing by pad, pad vias for signals, the four-pass logic as a whole,
-   `trim_centres`, the timing code.
-
-The SVP loop is closed for the landscape board (9.2 mm for a 9.4 mm tree).
+- Partial copy: still the largest gain.
+- Bias tracks blocking the copy.
+- Supply shapes from pad positions.
+- `/Neck/CLD` and the five loose test points from the last round are with you.

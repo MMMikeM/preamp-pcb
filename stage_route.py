@@ -1,6 +1,7 @@
 """Runs the 6-layer routing one step at a time. Each step reads WORK, writes WORK, runs checks.py and (with --commit) commits.
     python stage_route.py setup  --from ../../../humbucker-preamp.kicad_pcb     # 1   6-layer conversion, rip-up
     python stage_route.py 2a     # high-impedance nets, top layer only, no vias          (router)
+    python stage_route.py 2p     # front-end and second-stage nets, top only, no vias     (router, a call per group)
     python stage_route.py 2b     # neighbour links on top, every net class               (neighbour_links.py)
     python stage_route.py 2c     # a via in every ground pad                             (drops.py --ground)
     python stage_route.py 2d     # supply: drops, L5 zones, battery and bias nets         (drops.py --supply, supply5.py, router on In4.Cu and In2.Cu)
@@ -12,11 +13,12 @@
 A step exits 1 if a script or the router it runs exits non-zero, or if a must-fix check is not empty. It then puts
 work/board.kicad_pcb back to what it was before the step; the result that failed stays in work/<step>.kicad_pcb to look at.
 Steps 2a, 2b and 2e leave alone the nets that 2h will make by copying, and the other channel's own nets: routed first they
-are only in the copy's way. 2i routes them afterwards.
+are only in the copy's way. 2i routes them afterwards. 2p is the exception: it routes the other channel's own front-end and
+second-stage nets too, so they are never left to the last step.
 With ROUTER_DIR set, every step also gets a second opinion from the router's own DRC and connectivity check (krt_checks.py).
 2g (tidy) is manual review for now. WORK defaults to ./work/board.kicad_pcb; every step keeps work/<step>.kicad_pcb as well.
 The router is KiCadRoutingTools (not included): set ROUTER_DIR to its checkout. Steps 2b, 2c, 2h, check and setup do not need it."""
-import sys, os, subprocess, shutil, argparse, json, math, time, re, contextlib
+import sys, os, subprocess, shutil, argparse, json, math, time, re, contextlib, fnmatch
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import board as bd, checks, krt_checks, mirror_route, drops
 WORK = os.environ.get('R6_WORK') or os.path.join(HERE, 'work'); BOARD = os.path.join(WORK, 'board.kicad_pcb')
@@ -165,6 +167,29 @@ def squeezed(B, net, since):
     pinch = [checks.label(p) for p in B.pads if p['net'] != net and p['ref'] not in own_refs and 'F.Cu' in p['layers'] and mine and min(g.distance(B.pad_geom(p)) for g in mine) - wid / 2 < PINCH]
     under = {r for r in {x.split('.')[0] for x in pinch} if len(B.fps[r]['pads']) == 2 and sum(x.split('.')[0] == r for x in pinch) == 2}   # passing under a two-pad part between its pads is allowed
     return [x for x in pinch if x.split('.')[0] not in under]
+def judge_top(B, net, since):
+    """(kind, detail) of why the net's top-layer route newer than `since` is refused, or None"""
+    t = tree_len([(p['x'], p['y']) for p in B.pads if p['net'] == net and not checks.is_tp(p)])
+    L = sum(math.dist((x['x1'], x['y1']), (x['x2'], x['y2'])) for x in B.segs if x['net'] == net)
+    if L > max(TOP_RATIO * t, t + TOP_EXTRA): return 'too long on top', f'too long on top ({L:.0f} mm for a {t:.0f} mm tree)'
+    pinch = squeezed(B, net, since)
+    if len(pinch) >= 2: return 'squeezed', f'squeezed on top, under {PINCH} mm from {pinch}'
+    near = hz_run(B, net, since)
+    if near > HZ_RUN: return 'beside high-impedance copper', f'runs {near:.1f} mm within {HZ_NEAR} mm of high-impedance copper'
+def net_classes():
+    f = os.path.join(WORK, 'net_classes.json')
+    if not os.path.exists(f): raise StepFailed('work/net_classes.json is missing: run setup with the .kicad_pro beside the board')
+    return json.load(open(f))
+def top_first(nets, label):
+    """Top layer only, no vias. A net is kept only if it joins and passes the same judging as pass 1 of 2e; the rest is removed and left for later."""
+    before = {x['uuid'] for x in bd.Board(BOARD).segs + bd.Board(BOARD).vias}
+    router(nets, ['F.Cu'], ['--via-cost', '100000'])
+    B = bd.Board(BOARD); later = []
+    for n in nets:
+        why = ('open', 'not joined on top') if checks.top_incomplete(B, n) else judge_top(B, n, before)
+        if why: later.append(n); count(f'{label} left for later: {why[0]}'); print(f'  {n}: {why[1]}, left for later')
+    B.remove([x['uuid'] for x in B.segs + B.vias if x['net'] in later and x['uuid'] not in before]); B.save(BOARD)
+    count(f'{label} nets kept on top', len(nets) - len(later))
 def wanders(B, net):
     """(too long, length, shortest tree) of a net that was allowed off the top layer"""
     t = tree_len([(p['x'], p['y']) for p in B.pads if p['net'] == net and not checks.is_tp(p)])
@@ -177,13 +202,8 @@ def route_signals(nets, step='2e'):
     t_judge = time.perf_counter()
     B = bd.Board(BOARD); again = []; redo = []
     for n in nets:
-        pts = [(p['x'], p['y']) for p in B.pads if p['net'] == n and not checks.is_tp(p)]; t = tree_len(pts)
-        L = sum(math.dist((x['x1'], x['y1']), (x['x2'], x['y2'])) for x in B.segs if x['net'] == n)
-        pinch = squeezed(B, n, before)
-        near_hz = hz_run(B, n, before)
-        if L > max(TOP_RATIO * t, t + TOP_EXTRA): again.append(n); redo.append(n); count(f'{step} rejected: too long on top'); print(f'  {n}: too long on top ({L:.0f} mm for a {t:.0f} mm tree)')
-        elif len(pinch) >= 2: again.append(n); redo.append(n); count(f'{step} rejected: squeezed'); print(f'  {n}: squeezed on top, under {PINCH} mm from {pinch}')
-        elif near_hz > HZ_RUN: again.append(n); redo.append(n); count(f'{step} rejected: beside high-impedance copper'); print(f'  {n}: runs {near_hz:.1f} mm within {HZ_NEAR} mm of high-impedance copper')
+        why = judge_top(B, n, before)
+        if why: again.append(n); redo.append(n); count(f'{step} rejected: {why[0]}'); print(f'  {n}: {why[1]}')
         elif checks.top_incomplete(B, n): again.append(n)                                  # partly done on top: keep what connected, L3 only for the missing links
     B.remove([x['uuid'] for x in B.segs if x['net'] in redo and x['uuid'] not in before])
     # pass 2: a via IN a pad for each top-layer piece (the router only puts vias in open space), then join those vias on L3 with no new vias
@@ -253,8 +273,23 @@ def run_step(s, src):
     if s == 'setup':
         if not src: raise SystemExit('--from BOARD needed')
         sh([PY, os.path.join(HERE, 'setup6.py'), src, BOARD])
+        pro = os.path.splitext(src)[0] + '.kicad_pro'; cl = {}
+        if not os.path.exists(pro): print('  no .kicad_pro beside the board, so step 2p has no net classes')
+        else:
+            ns = json.load(open(pro)).get('net_settings', {})
+            for p in ns.get('netclass_patterns') or []: cl.setdefault(p['netclass'], []).append(p['pattern'])
+            json.dump(cl, open(os.path.join(WORK, 'net_classes.json'), 'w'), indent=1)
     elif s == '2a':
         B = bd.Board(BOARD); later = mirror_route.waits_for_copy(B); route_hz([n for n in open_hz(B) if n not in later])
+    elif s == '2p':
+        # before 2b, so a neighbour link (a supply link above all) routes round these nets instead of through their way. The rest of the
+        # front end goes last: the sources sit on a low-impedance resistor ladder and can take a via
+        B = bd.Board(BOARD); cl = net_classes(); copies = {t['twin'] for t in mirror_route.plan(B)[0]}
+        of = lambda c: [n for n in B.nets if n not in copies and checks.top_incomplete(B, n) and any(fnmatch.fnmatchcase(n, p) for p in cl.get(c, []))]
+        drain = lambda n: n.split('/')[-1] in ('DA', 'DB')
+        for label, group in (('2p drains', [n for n in of('P2_FrontEnd') if drain(n)]), ('2p stage 2', of('P4_Stage2')),
+                             ('2p front end', [n for n in of('P2_FrontEnd') if not drain(n)])):
+            if group: top_first(group, label)
     elif s == '2b':
         B = bd.Board(BOARD); later = mirror_route.waits_for_copy(B); sh(links + ['--nets', *[n for n in B.nets if n not in later]])
     elif s == '2c': sh([PY, os.path.join(HERE, 'drops.py'), BOARD, BOARD, '--ground', '--json', os.path.join(WORK, '2c_drops.json')])
