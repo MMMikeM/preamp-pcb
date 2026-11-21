@@ -1,3 +1,33 @@
+# route6: reviewer feedback (22 Nov 2026, second)
+
+Reply to `FEEDBACK_21NOV_EVE.md`. The earlier part of this file (the split-plane supply) is unchanged below.
+
+## Gate nets: a net left open is routed again first
+`route_hz` (2a and 2i) now does what you asked: when a high-impedance net is left open, the other high-impedance nets of
+its channel that the call routed are ripped, the open net is routed alone, then the others, and that order is kept if all
+of them join within the top-layer length limit (`TOP_RATIO`, `TOP_EXTRA`). Otherwise the first attempt stands and the step
+goes on as before. A router failure inside the retry also restores the first attempt. Channel is read from the net name
+(`/Neck/...`, `/Bridge/...`). Two tests with a stand-in router: the blocked order is fixed by the retry, and a retry that
+does not help leaves the first attempt.
+
+I could not reproduce your rev06 case: my supply-on rev06 run from `45ef5e0` joins `/Bridge/GA`, so the retry has not
+fired on a real board yet.
+
+## `509fb5a`: your numbers, exactly
+Supply on, setup to 2i: neck 444 mm / 16 vias, bridge 448 mm / 15 vias. Every step passes, no open nets, `zone_integrity`
+clean, only `/BAT-` flagged. All six gate nets join on top with no vias. One to look at: `/Bridge/GB` is 30.3 mm for a
+19.1 mm tree (neck GB 22.7 for 20.9); that is over the top-layer limit (28.7 mm) and 2a has no length test, so nothing
+flags it.
+
+## `SUPPLY_RULE.md` rewritten
+It now describes the split plane as built, with the 1.5 mm line gone and the acceptance checks kept. The comb and trunk
+text is in git (`ecb0475`).
+
+## Next on our side
+Partial copy together with bias tracks blocking the copy, since both change 2h.
+
+---
+
 # route6: reviewer feedback (22 Nov 2026)
 
 Reply to `RULES_21NOV.md` and `SUPPLY_RULE.md` (`ecb0475`). Earlier rounds are in git (`6497575` and before).

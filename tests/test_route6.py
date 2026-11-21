@@ -344,3 +344,27 @@ def test_the_split_plane_gives_each_rail_one_whole_zone_holding_all_its_vias(wor
     B = bd.Board(stage_route.BOARD)
     assert sorted(z['net'] for z in B.zones if z['net'] in bd.RAILS) == ['V+', 'V-'] and checks.zone_integrity(B) == []
     assert all(len(checks.pad_groups(B, n)) == 1 for n in bd.RAILS)
+def _order_sensitive_router(B, work, monkeypatch, blocker, blocked, always=False):
+    """A stand-in router that joins each given net in the order given, straight through its pads, except that `blocked` cannot join
+    once `blocker` has copper (or never, with always=True)"""
+    monkeypatch.setenv('ROUTER_DIR', str(work)); B.save(stage_route.BOARD)
+    def run(cmd, cwd):
+        C = bd.Board(stage_route.BOARD)
+        for n in cmd[cmd.index('--nets') + 1:cmd.index('--layers')]:
+            if n == blocked and (always or any(s['net'] == blocker for s in C.segs)): continue
+            ps = ends(C, n); track(C, n, [(p['x'], p['y']) for p in ps])
+        C.save(stage_route.BOARD + '.tmp'); return dict(returncode=0)
+    monkeypatch.setattr(stage_route, 'run_router', run)
+def _same_channel_pair(B):
+    """two short two-pad nets of one channel; the stand-in router decides which blocks which"""
+    ns = close_pairs(B); return next((a, b) for a, b in itertools.combinations(ns, 2) if stage_route.channel(a) == stage_route.channel(b))
+def test_a_gate_net_left_open_is_routed_first_and_both_join(bare, work, monkeypatch):
+    a, b = _same_channel_pair(bare)
+    _order_sensitive_router(bare, work, monkeypatch, blocker=a, blocked=b)
+    stage_route.route_hz([a, b])
+    B = bd.Board(stage_route.BOARD); assert not checks.top_incomplete(B, a) and not checks.top_incomplete(B, b)
+def test_a_gate_reorder_that_does_not_help_leaves_the_first_attempt(bare, work, monkeypatch):
+    a, b = _same_channel_pair(bare)
+    _order_sensitive_router(bare, work, monkeypatch, blocker=a, blocked=b, always=True)
+    stage_route.route_hz([a, b])
+    B = bd.Board(stage_route.BOARD); assert not checks.top_incomplete(B, a) and checks.top_incomplete(B, b)

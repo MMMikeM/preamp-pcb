@@ -161,10 +161,28 @@ def finish(step, commit, final=False, failed=None):
 
 def open_hz(B): return [n for n in B.nets if bd.is_hz(n) and checks.unconnected(B, [n])]
 def open_signals(B): return [n for n in B.nets if bd.is_signal(n) and checks.top_incomplete(B, n)]
-def route_hz(nets): router(nets, ['F.Cu'], ['--via-cost', '100000', '--track-width', '0.2'])
+HZ_ARGS = ['--via-cost', '100000', '--track-width', '0.2']
+def channel(net): return net.split('/')[1] if net.count('/') > 1 else None
+def route_hz(nets):
+    """Top only, no vias, so the order the router picks can be fatal: a net routed first along its shortest path may close the only
+    corridor another one had. A net left open is routed again on its own before the others of its channel that the call routed, and that
+    order is kept if every one of them joins within the top-layer length limit; otherwise the first attempt stands."""
+    before = copper_ids(bd.Board(BOARD)); shut_out = router(nets, ['F.Cu'], HZ_ARGS)
+    for n in shut_out:
+        mates = [m for m in nets if m not in shut_out and channel(m) == channel(n)]
+        if not mates: continue
+        shutil.copy(BOARD, BOARD + '.hz'); drop_new(bd.Board(BOARD), mates + [n], before)
+        try: router([n], ['F.Cu'], HZ_ARGS); router(mates, ['F.Cu'], HZ_ARGS); B = bd.Board(BOARD); worse = [m for m in [n] + mates if not joins_short(B, m)]
+        except StepFailed: worse = [n] + mates
+        if worse: shutil.copy(BOARD + '.hz', BOARD)
+        count('high-impedance nets routed again first'); count('high-impedance reorders kept', int(not worse))
+        print(f'  {n} was left open; routed first, then {mates}: ' + (f'kept, all joined' if not worse else f'not kept ({worse} open or too long), the first attempt stands'))
+    if os.path.exists(BOARD + '.hz'): os.remove(BOARD + '.hz')
 for _switch in ('KICAD_RIP_PREEXISTING', 'KICAD_FINALIZE_RIP', 'KICAD_RECONCILE_RIP_ESCALATION'): os.environ.setdefault(_switch, '0')   # the router must never rip copper an earlier step placed; each of the three grants that on its own
 L3_RATIO = 1.8; L3_EXTRA = 12.0; PINCH = 0.25; HZ_NEAR = tl.HZ_KEEP; HZ_RUN = 3.0; OWN_PAD = 2.5     # a top route is rejected if it squeezes between two foreign pads, or runs more than HZ_RUN mm inside the soft keep-away of a high-impedance net
 TOP_ONLY = ['--via-cost', '100000']; TOP_AND_L3 = ['--layer-costs', '1.0', '1.2', '--via-cost', '150']
+def joins_short(B, net):
+    L, t = length_and_tree(B, net); return not checks.top_incomplete(B, net) and L <= max(TOP_RATIO * t, t + TOP_EXTRA)
 def copper_ids(B): return {x['uuid'] for x in B.segs + B.vias}
 def drop_new(B, nets, since):
     """Removes the nets' tracks and vias that are not in `since` and saves the board"""
