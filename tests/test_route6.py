@@ -193,9 +193,13 @@ def test_guard_fails_on_copper_for_a_net_it_was_not_given(linked, tmp_path):
 def test_guard_fails_on_a_lock_left_behind(linked, tmp_path):
     A, out = _router_result(linked, tmp_path, lambda B: B.lock([B.segs[0]['uuid']]))
     with pytest.raises(stage_route.StepFailed, match='changed earlier copper'): stage_route.guard(A, out, {'/Neck/DA'})
+def zone_text(net, poly, layer='In4.Cu'):
+    pts = ' '.join(f'(xy {x:.3f} {y:.3f})' for x, y in list(poly.exterior.coords)[:-1])
+    return (f'\n\t(zone\n\t\t(net "{net}")\n\t\t(layer "{layer}")\n\t\t(uuid "{net}-test")\n\t\t(name "{net}_test")\n\t\t(hatch edge 0.5)\n\t\t(priority 2)\n'
+            f'\t\t(connect_pads yes\n\t\t\t(clearance 0.2)\n\t\t)\n\t\t(min_thickness 0.25)\n\t\t(fill yes)\n\t\t(polygon\n\t\t\t(pts\n\t\t\t\t{pts}\n\t\t\t)\n\t\t)\n\t)\n')
 def _supply_zone(B, net='V+'):
-    import supply5; x0, y0 = 105.0, 100.0
-    B.add([supply5.zone_text(net, box(5, 20, 8, 40), f'{net}_test')])       # zone_text takes mm from the board corner
+    x0, y0 = 105.0, 100.0
+    B.add([zone_text(net, box(x0, y0, x0 + 3, y0 + 20))])
     B.add([B.via_text(x0 + 1.5, y0 + 2, 0.6, 0.3, net), B.via_text(x0 + 1.5, y0 + 18, 0.6, 0.3, net)])
 def test_zone_check_passes_a_whole_finger_and_flags_a_cut_one(bare):
     _supply_zone(bare); assert checks.zone_integrity(bare) == []
@@ -208,10 +212,6 @@ def test_via_check_ignores_pieces_that_never_leave_the_top_layer(bare):
     assert flagged() == []                                                              # two bare pads: unfinished, not unjustified
     q = next(p for p in bare.pads if checks.label(p) == 'Q303.2'); bare.add([bare.via_text(q['x'], q['y'], 0.5, 0.3, '/BAT-')])
     assert len(flagged()) == 1
-def test_supply_track_is_refused_where_it_would_crowd_other_copper(bare):
-    import supply5; path = [(5, 20), (9, 20)]                                           # mm from the board corner
-    assert supply5.track_fits(bare, 'V+', 'In2.Cu', path)
-    bare.add([bare.via_text(107, 100.5, 0.6, 0.3, 'GND')]); assert not supply5.track_fits(bare, 'V+', 'In2.Cu', path)
 def test_channel_shift_is_read_from_the_placement(bare):
     assert bd.channel_shift(bare) == 19.45
 def test_a_killed_router_call_leaves_no_locks(linked, work):
@@ -337,3 +337,10 @@ def test_a_signal_pad_via_goes_in_the_pad_nearest_the_rest_of_the_net(bare):
     drops.run(bare, signals=[n], log=lambda *_: None)
     inside = lambda p: any(bare.pad_geom(p).contains(Point(v['x'], v['y'])) for v in bare.vias if v['net'] == n)
     assert inside(near) and not inside(far)
+@pytest.mark.skipif(not os.environ.get('ROUTER_DIR'), reason='needs ROUTER_DIR (KiCadRoutingTools checkout)')
+def test_the_split_plane_gives_each_rail_one_whole_zone_holding_all_its_vias(work):
+    B = bd.Board(REV06); B.text = setup6.convert(B.text); B._parse(); B.remove([x['uuid'] for x in B.segs + B.vias])
+    drops.run(B, supply=True, log=lambda *_: None); B.save(stage_route.BOARD); stage_route.split_supply()
+    B = bd.Board(stage_route.BOARD)
+    assert sorted(z['net'] for z in B.zones if z['net'] in bd.RAILS) == ['V+', 'V-'] and checks.zone_integrity(B) == []
+    assert all(len(checks.pad_groups(B, n)) == 1 for n in bd.RAILS)

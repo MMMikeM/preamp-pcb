@@ -8,7 +8,7 @@ Nets that mix both mappings, or touch shared parts (3xx, U5, U6), are listed and
 usage: mirror_route.py IN OUT [--from 1] [--dry-run] [--json OUT.json]"""
 import sys, re, json, math, argparse
 from shapely.strtree import STRtree
-import board as bd, supply5, checks
+import board as bd, checks
 TOL = 0.03
 
 def is_src(ref, src): return bool(re.match(r'[A-Z]+%s\d\d$' % src, ref)) and not ref.startswith('TP')
@@ -66,7 +66,7 @@ def blocker(B, twin, segs, vias):
     for layer in B.copper_layers:
         new = [B.seg_geom(s) for s in segs if s['layer'] == layer] + [B.via_geom(v) for v in vias]
         if not new: continue
-        staying = [(n, g) for n, g, k, o in B.copper(layer) if n != twin and not (k == 'seg' and supply5.is_centre(B, o))]; tree = STRtree([g for _, g in staying])   # a via may land on a scaffold track: run() trims it back, as drops does
+        staying = [(n, g) for n, g, k, o in B.copper(layer) if n != twin]; tree = STRtree([g for _, g in staying])   # a via may land on a scaffold track: run() trims it back, as drops does
         for g in new:
             for j in tree.query(g.buffer(bd.CLEAR_HZ + 0.01)):
                 n, h = staying[int(j)]
@@ -95,7 +95,6 @@ def run(B, src='1', dry=False):
         B.remove([x['uuid'] for x in B.segs + B.vias if x['net'] == t['twin']])
         B.add([B.seg_text(s['x1'], s['y1'], s['x2'], s['y2'], s['w'], s['layer'], t['twin']) for s in segs] +
               [B.via_text(v['x'], v['y'], v['size'], v['drill'], t['twin']) for v in vias])
-    if todo and not dry: supply5.trim_centres(B, log=lambda *_: None)
     routed = lambda n: any(x['net'] == n for x in B.segs + B.vias) and not checks.unconnected(B, [n])
     for s in skipped:                                     # a net with nothing to do on the other channel is not work for step 2i, and the report should not say so
         theirs = other_side(B, s['net'], src) - {s['net']}

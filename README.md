@@ -23,7 +23,11 @@ failed stays in `work/<step>.kicad_pcb` to look at. A board with arc tracks is r
   is kept only if it joins and passes 2e's pass-1 judging; the rest is left for `2e`. Unlike the other early steps it also
   routes the other channel's own nets.
 - `2d` adds no top-layer supply links of its own: `2b` has already joined supply pads up to 4 mm apart. It drops the supply
-  vias and lays the V+/V- zones on L5 (`supply5.py`). `via_justify.py` judges V+, V- and the bias nets by 2b's limits.
+  vias, then lays one V+ and one V- zone on L5 from the router's split plane (`route_planes.py`, the "spine split"): GND
+  stays the layer's background, and each rail's zone is grown round its own pads and vias and joined by corridors laid so
+  the two never cross. Nothing is placed by coordinates. The battery and bias nets are routed after the zones, and
+  `zone_integrity` fails the step if one cuts a zone. `R6_SKIP_SUPPLY=1` leaves the zones out, for comparing signal
+  routing between placements. `via_justify.py` judges V+, V- and the bias nets by 2b's limits.
 - `2a`, `2b` and `2e` leave the other channel alone (`2p`'s nets aside): `2h` then copies one channel onto it, skipping any net whose copy would
   collide with copper that is staying, and `2i` routes whatever the copy did not cover.
 - `2f` puts a via in each loose test point where one fits and has the router reach the rest by a track.
@@ -31,7 +35,7 @@ failed stays in `work/<step>.kicad_pcb` to look at. A board with arc tracks is r
 ## The router (KiCadRoutingTools)
 Set `ROUTER_DIR` to a checkout of https://github.com/drandyhaas/KiCadRoutingTools (MIT). It does two jobs here:
 
-1. Steps 2a, 2p, 2d, 2e, 2i and 2f call its `py_router/route.py`. That needs its compiled extension (`python build_router.py` there).
+1. Steps 2a, 2p, 2d, 2e, 2i and 2f call its `py_router/route.py`, and 2d also its `py_router/route_planes.py`. That needs its compiled extension (`python build_router.py` there).
 2. With `ROUTER_DIR` set, every step also gets a second opinion from its DRC and connectivity check (`krt_checks.py`).
    This part needs only `scipy` and `Pillow`, not the compiled extension. Its DRC items are must-fix. Nets that only it
    calls unconnected are listed as `krt_unconnected_extra` and are for a human to settle in KiCad after refilling zones:

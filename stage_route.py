@@ -4,7 +4,7 @@
     python stage_route.py 2p     # front-end and second-stage nets, top only, no vias     (router, a call per group)
     python stage_route.py 2b     # neighbour links on top, every net class               (neighbour_links.py)
     python stage_route.py 2c     # a via in every ground pad                             (drops.py --ground)
-    python stage_route.py 2d     # supply: drops, L5 zones, battery and bias nets         (drops.py --supply, supply5.py, router on In4.Cu and In2.Cu)
+    python stage_route.py 2d     # supply: drops, L5 zones, battery and bias nets         (drops.py --supply, the router's split plane, router on In4.Cu and In2.Cu)
     python stage_route.py 2e     # remaining signals: top first, L3 only when needed     (router twice + length test)
     python stage_route.py 2h     # copy the routing to the other channel                 (mirror_route.py)
     python stage_route.py 2i     # what the copy did not cover: links, then the router   (neighbour_links.py, router as in 2a and 2e)
@@ -65,11 +65,27 @@ def sh(cmd, check=True, ok=(0,), **kw):
     with timed(name, kind='script'): r = subprocess.run(cmd, **kw)
     if r.returncode not in ok and check: raise StepFailed(f'{name} exited {r.returncode}')
     return r
+def router_dir():
+    rd = os.environ.get('ROUTER_DIR')
+    if not rd: raise StepFailed('set ROUTER_DIR to the KiCadRoutingTools checkout for this step')
+    return rd
+def split_supply(layer='In4.Cu'):
+    """V+ and V- zones on L5 from the router's split plane (route_planes.py, the "spine split"): GND is the layer's background, and
+    each rail gets one zone grown round its pads and vias and joined by corridors laid so the two rails never cross. Nothing is placed
+    by coordinates, so the zones follow the placement. Only the two zones are kept: the tool's own GND pieces would replace setup's pour."""
+    out = BOARD + '.tmp'; A = bd.Board(BOARD)
+    sh([PY, 'py_router/route_planes.py', BOARD, out, '--nets', 'GND|' + '|'.join(sorted(bd.RAILS)), '--plane-layers', layer, '--skip-existing-zones',
+        '--zone-clearance', str(bd.CLEAR), '--min-thickness', '0.25', '--no-thermal-vias', '--clearance', str(bd.CLEAR), '--board-edge-clearance', str(bd.EDGE),
+        '--hole-to-hole-clearance', str(bd.HOLE_GAP), '--net-clearances', bd.NET_CLEARANCES], cwd=router_dir())
+    guard(A, out, set())
+    zones = bd.Board(out).zone_blocks(bd.RAILS); os.remove(out)
+    made = {n for n in bd.RAILS if any(f'(net "{n}")' in z for z in zones)}
+    if made != bd.RAILS: raise StepFailed(f'the split plane made no zone for {sorted(bd.RAILS - made)}')
+    A.add(zones); A.save(BOARD); count('supply zones', len(zones))
 def router(nets, layers, extra=(), clearances=None, add_only=False):
     """Returns the given nets the router left open"""
     if not nets: print('  nothing to route on', *layers); return []
-    rd = os.environ.get('ROUTER_DIR')
-    if not rd: raise StepFailed('set ROUTER_DIR to the KiCadRoutingTools checkout for this step')
+    rd = router_dir()
     out = BOARD + '.tmp'
     cmd = [PY, '-u', 'py_router/route.py', BOARD, out, '--nets', *nets, '--layers', *layers, '--grid-step', '0.05', '--heuristic-weight', '1.0',
            '--same-net-pad-clearance', '0.15', '--fab-tier', 'standard', '--escalation', 'off',
@@ -340,13 +356,12 @@ def run_step(s, src):
     elif s == '2c': sh([PY, os.path.join(HERE, 'drops.py'), BOARD, BOARD, '--ground', '--json', os.path.join(WORK, '2c_drops.json')])
     elif s == '2d':
         sh([PY, os.path.join(HERE, 'drops.py'), BOARD, BOARD, '--supply', '--json', os.path.join(WORK, '2d_drops.json')])
-        nc = os.path.join(WORK, '2d_net_clearances.json')
-        sh([PY, os.path.join(HERE, 'supply5.py'), BOARD, BOARD, '--nc', nc])       # V+/V- fingers (zones + centre tracks), stubs, the one L3 crossing
+        if not os.environ.get('R6_SKIP_SUPPLY'): split_supply()                  # R6_SKIP_SUPPLY=1: no zones, for comparing signal routing between placements
         B = bd.Board(BOARD); bat = [n for n in B.nets if bd.is_battery(n)]; bias = [n for n in B.nets if n in bd.BIAS]
         router(bat, ['In4.Cu'], ['--via-cost', '100000', '--track-width', '0.5'])
         # bias nets: L3 runs east-west, L5 north-south (the router alternates by position in --layers); BIAS_L3_COST trades L3 length against hop vias
         router(bias, ['In2.Cu', 'In4.Cu'], ['--layer-costs', os.environ.get('BIAS_L3_COST', '2.0'), '1.0', '--via-cost', '40', '--track-width', '0.4',
-                                            '--direction-preference-cost', '1000'], clearances=nc)
+                                            '--direction-preference-cost', '1000'])
     elif s == '2e':
         B = bd.Board(BOARD); later = mirror_route.waits_for_copy(B); still_open, long = route_signals([n for n in open_signals(B) if n not in later])
         # every one of these nets has now been attempted, so one left open or wandering is this step's failure, not something for the final check to find

@@ -10,7 +10,7 @@ usage: drops.py IN OUT [--ground] [--supply] [--testpoints] [--json OUT.json]"""
 import sys, json, math, argparse
 from shapely.geometry import Point
 from shapely.strtree import STRtree
-import board as bd, toplink as tl, checks, supply5
+import board as bd, toplink as tl, checks
 FAT = (0.7, 0.3); BIG = (0.6, 0.3); SMALL = (0.5, 0.3)
 NO_ROOM = 2          # exit code: apart from a crash's 1, so a caller can carry on where another step can still reach the pad
 
@@ -23,8 +23,7 @@ class Placer:
         self.B = B; self.outline = B.outline(); self.refresh()
     def refresh(self):
         B = self.B; self.cu = []
-        # finger centre tracks do not block a via: the zone flows round it and trim_centres cuts the track back
-        for l in B.copper_layers: self.cu += [(n, g) for n, g, k, o in B.copper(l) if not (k == 'seg' and supply5.is_centre(B, o))]
+        for l in B.copper_layers: self.cu += [(n, g) for n, g, k, o in B.copper(l)]
         self.tree = STRtree([g for _, g in self.cu])
         self.holes = [(v['x'], v['y'], v['drill']) for v in B.vias] + [(p['x'], p['y'], p['drill']) for p in B.pads if p['drill']]
     def legal(self, x, y, size, drill, net):
@@ -86,8 +85,6 @@ def run(B, ground=False, supply=False, testpoints=False, signals=(), log=print):
         for p in list(B.pads):
             if not checks.is_tp(p) or not p['net'] or p['net'] in bd.GROUND or bd.is_hz(p['net']) or p['drill']: continue
             if not checks.tp_joined(B, p): drop(p, 'test point')
-    if added:
-        supply5.trim_centres(B, log)
     for a in added: log(f"via {a['pad']:<10} {a['net']:<20} {a['size']} ({a['why']})")
     for f in failed: log(f"NO ROOM {f['pad']} {f['net']} ({f['why']})")
     return added, failed

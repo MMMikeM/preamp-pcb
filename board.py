@@ -147,6 +147,17 @@ class Board:
         f = self._f
         return (f'\t(via\n\t\t(at {f(x)} {f(y)})\n\t\t(size {f(size)})\n\t\t(drill {f(drill)})\n\t\t(layers "{layers[0]}" "{layers[1]}")\n'
                 f'\t\t(net "{net}")\n\t\t(uuid "{_uuid.uuid4()}")\n\t)\n')
+    def zone_blocks(self, nets):
+        """The text of each zone of these nets, as add() takes it"""
+        out = []
+        for m in re.finditer(r'\n\t\(zone\b', self.text):
+            s = m.start() + 1; depth = 0; j = s + 1                                         # s at the tab, j at the opening bracket
+            while True:
+                c = self.text[j]; depth += (c == '(') - (c == ')'); j += 1
+                if depth == 0: break
+            net = re.search(r'\(net "([^"]*)"\)', self.text[s:j])                    # a rule area has no net
+            if net and net.group(1) in nets: out.append(self.text[s:j] + '\n')
+        return out
     def add(self, chunks):
         i = self.text.rstrip().rfind(')'); self.text = self.text[:i] + ''.join(chunks) + ')\n'; self._parse()
     def _track_blocks(self):
