@@ -31,7 +31,10 @@ worth a second look.
 
 ## Left
 - 2f, once the test points are back.
-- Yours: `compare_channels.py` by part name and board origin from the outline; the test points; `Net-(Q103-B)`.
+- Yours: board origin from the outline in `r6render.py`; the test points.
+- Done on the author's side (21 Nov, evening): `compare_channels.py` now splits by part name (X1nn/U1/U3 neck, X2nn/U2/U4
+  bridge, the rest 'Shared'; net names /Neck/ and /Bridge/ win), so it no longer depends on x < 137. `Net-(Q103-B)` is
+  fixed by the author's rework: 8.0 mm, no vias, joined in 2p (`Net-(Q203-B)` 7.7 mm, no vias) on `509fb5a` at `1f3afca`.
 
 ---
 
