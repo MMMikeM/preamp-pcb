@@ -110,7 +110,7 @@ def hz_rule(B):
 def no_via_pads(B):
     out = []
     for p in B.pads:
-        if p['ref'] in bd.NO_VIA_REFS:
+        if B.fps[p['ref']]['hand']:
             g = B.pad_geom(p)
             out += [dict(ref=p['ref'], pad=p['num']) for v in B.vias if g.contains(Point(v['x'], v['y']))]
     return out

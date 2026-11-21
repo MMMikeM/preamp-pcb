@@ -1,5 +1,5 @@
 """Run from the route6 folder:  python -m pytest -q tests      (about 4 minutes; needs shapely and numpy, not the router)"""
-import os, sys, math, re, copy, subprocess, pytest
+import os, sys, math, re, copy, itertools, subprocess, pytest
 from shapely.geometry import Point, box
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, os.path.dirname(HERE))
 import board as bd, toplink as tl, via_justify, neighbour_links, drops, checks, setup6, mirror_route, stage_route, krt_checks
@@ -63,7 +63,7 @@ def test_drops(linked):
     # known, real conflict on this placement: test point TP205 (BO, bottom side) sits right under U4 pin 10 (REF)
     assert {f['net'] for f in failed} <= {'REF'} and all('U4.10' in f['pad'] for f in failed) and len(failed) <= 1
     assert checks.clearances(B) == [] and checks.holes(B) == [] and checks.no_via_pads(B) == []
-    gnd = [p for p in B.pads if p['net'] == 'GND' and drops.smd_top(p) and p['ref'] not in bd.NO_VIA_REFS and not p['ref'].startswith('TP')]
+    gnd = [p for p in B.pads if p['net'] == 'GND' and drops.smd_top(p) and not B.fps[p['ref']]['hand'] and not p['ref'].startswith('TP')]
     assert all(drops.has_via(B, p) for p in gnd)
     assert all((v['size'] - v['drill']) / 2 >= 0.1 - 1e-9 for v in B.vias)
     assert [u for u in checks.unconnected(B) if u['net'] == 'GND'] == []
@@ -315,3 +315,25 @@ def test_a_pair_joined_through_vias_with_a_free_top_path_is_routed_on_top_again(
     B = bd.Board(stage_route.BOARD)
     assert not [v for v in B.vias if v['net'] == good] and {s['layer'] for s in B.segs if s['net'] == good} == {'F.Cu'}
     assert len([v for v in B.vias if v['net'] == bad]) == 2 and not checks.top_incomplete(B, bad)
+REV06 = os.path.join(os.path.dirname(HERE), 'fixtures', 'landscape-rev06', 'humbucker-preamp.kicad_pcb')
+def test_hand_swapped_parts_are_read_from_the_footprint_description():
+    import hand_access; B = bd.Board(REV06)                                             # rev 0.6 renumbered them: R109 and R117 are other parts now
+    assert hand_access.hand_refs(B) == {'R106', 'R114', 'R206', 'R214'}
+    assert {r for r, v in hand_access.check(B, hand_access.hand_refs(B)).items() if not v['ok']} == {'R106', 'R206'}
+def test_a_signal_pad_via_goes_in_the_pad_nearest_the_rest_of_the_net(bare):
+    P = drops.Placer(bare)
+    def cases():
+        for n in bare.nets:
+            if not bd.is_signal(n): continue
+            ps = [p for p in ends(bare, n) if p['ref'][0] not in 'UQ' and drops.smd_top(p) and not bare.fps[p['ref']]['hand']]
+            for a, b in itertools.combinations(ps, 2):
+                for c in ends(bare, n):
+                    if c not in (a, b) and abs(min(a['w'], a['h']) - min(b['w'], b['h'])) < 1e-9 and P.spot(a) and P.spot(b):
+                        da, db = math.dist((a['x'], a['y']), (c['x'], c['y'])), math.dist((b['x'], b['y']), (c['x'], c['y']))
+                        near, far = (a, b) if da < db else (b, a)
+                        if abs(da - db) > 1 and len(ends(bare, n)) == 3 and bare.pads.index(far) < bare.pads.index(near): yield n, (near, far)   # file order alone would pick the far one
+    n, (near, far) = next(cases())
+    track(bare, n, [(far['x'], far['y']), (near['x'], near['y'])])                     # the two equal pads as one top-layer piece, the third pad on its own
+    drops.run(bare, signals=[n], log=lambda *_: None)
+    inside = lambda p: any(bare.pad_geom(p).contains(Point(v['x'], v['y'])) for v in bare.vias if v['net'] == n)
+    assert inside(near) and not inside(far)

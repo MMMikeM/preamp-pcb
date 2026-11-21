@@ -20,7 +20,7 @@ With ROUTER_DIR set, every step also gets a second opinion from the router's own
 The router is KiCadRoutingTools (not included): set ROUTER_DIR to its checkout. Steps 2b, 2c, 2h, check and setup do not need it."""
 import sys, os, subprocess, shutil, argparse, json, math, time, re, contextlib, fnmatch
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
-import board as bd, toplink as tl, checks, krt_checks, mirror_route, drops, via_justify
+import board as bd, toplink as tl, checks, krt_checks, mirror_route, drops, via_justify, hand_access
 from shapely.geometry import LineString, Point
 from shapely.ops import unary_union
 WORK = os.environ.get('R6_WORK') or os.path.join(HERE, 'work'); BOARD = os.path.join(WORK, 'board.kicad_pcb')
@@ -321,6 +321,9 @@ def run_step(s, src):
             ns = json.load(open(pro)).get('net_settings', {})
             for p in ns.get('netclass_patterns') or []: cl.setdefault(p['netclass'], []).append(p['pattern'])
             json.dump(cl, open(os.path.join(WORK, 'net_classes.json'), 'w'), indent=1)
+        B = bd.Board(BOARD)                                                    # a warning, not a failure: the placement is the author's to fix, and routing can still run
+        for r, v in hand_access.check(B, hand_access.hand_refs(B)).items():
+            if not v['ok']: print(f"  WARNING: {r} is swapped by hand but hard to reach: nearest other pad {v['nearest_mm']} mm (needs {hand_access.SPACE_MM}), no clear board edge within {hand_access.EDGE_MM} mm"); count('hand-swap parts hard to reach')
     elif s == '2a':
         B = bd.Board(BOARD); later = mirror_route.waits_for_copy(B); route_hz([n for n in open_hz(B) if n not in later])
     elif s == '2p':

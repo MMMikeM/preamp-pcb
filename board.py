@@ -32,7 +32,6 @@ def write_clearances(path, over=None): json.dump(net_clearances(over), open(path
 def is_battery(net): return 'BAT' in net
 def is_supply(net): return net in RAILS or net in BIAS or is_battery(net)
 def is_signal(net): return net not in GROUND and not is_supply(net) and not is_hz(net)
-NO_VIA_REFS = {'R109', 'R117', 'R209', 'R217'}          # hand-swapped parts: no via in their pads
 LAYERS6 = ['F.Cu', 'In1.Cu', 'In2.Cu', 'In3.Cu', 'In4.Cu', 'B.Cu']   # L1..L6
 CLEAR = 0.2; CLEAR_HZ = 0.4
 EDGE = 0.5                                              # copper to board edge
@@ -71,7 +70,9 @@ class Board:
             at = first(fp, 'at'); fx, fy = float(at[1]), float(at[2]); fr = float(at[3]) if len(at) > 3 else 0.0
             ref = next(p[2] for p in find(fp, 'property') if p[1] == 'Reference')
             val = next(p[2] for p in find(fp, 'property') if p[1] == 'Value')
-            self.fps[ref] = dict(ref=ref, val=val, x=fx, y=fy, r=fr, layer=first(fp, 'layer')[1], pads=[])
+            desc = next((p[2] for p in find(fp, 'property') if p[1] == 'Description'), '')
+            # a part swapped by hand gets no via in its pads; the schematic marks it, so renumbering does not lose it
+            self.fps[ref] = dict(ref=ref, val=val, x=fx, y=fy, r=fr, layer=first(fp, 'layer')[1], pads=[], hand='swap by hand' in desc.lower())
             for p in find(fp, 'pad'):
                 pa = first(p, 'at'); dx, dy = rot(float(pa[1]), float(pa[2]), fr)
                 # the file stores a pad's angle as absolute (footprint rotation included), so a missing angle means 0

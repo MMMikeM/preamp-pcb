@@ -2,7 +2,7 @@
  --ground   one via in every surface-mount ground pad (down to the ground planes)
  --supply   one via per top-layer piece of each supply or bias net; decoupling caps always get their own
  --testpoints  one via in every surface-mount test-point pad that is not yet joined to its net (never on a high-impedance net)
-Never puts a via in the hand-swap resistors (board.NO_VIA_REFS) or in through-hole pads (they already reach every layer).
+Never puts a via in a part swapped by hand (its footprint description says so) or in through-hole pads (they already reach every layer).
 Via size: the largest of 0.7/0.3, 0.6/0.3, 0.5/0.3 that fits inside the pad and is legal there (0.5/0.3 = 0.1 mm ring, the project minimum).
 A via is placed at the pad centre; if that breaks a clearance it is slid along the pad's long axis; if nothing fits it is reported, not forced.
 Exit 2 when a pad could not take its via (the board is still saved), 0 otherwise.
@@ -50,7 +50,7 @@ def smd_top(p): return p['kind'] == 'smd' and p['layers'] == {'F.Cu'}
 def run(B, ground=False, supply=False, testpoints=False, signals=(), log=print):
     P = Placer(B); added = []; failed = []
     def drop(p, why, report=True):
-        if p['ref'] in bd.NO_VIA_REFS or has_via(B, p): return False
+        if B.fps[p['ref']]['hand'] or has_via(B, p): return False
         s = P.spot(p)
         if not s:
             if report: failed.append(dict(pad=checks.label(p), net=p['net'], why=why))
@@ -63,7 +63,7 @@ def run(B, ground=False, supply=False, testpoints=False, signals=(), log=print):
         import via_justify
         for net in [n for n in B.nets if bd.is_supply(n)]:
             for c in tl.components(B, net):
-                pads = [q for q in c['pads'] if smd_top(q) and q['ref'] not in bd.NO_VIA_REFS]
+                pads = [q for q in c['pads'] if smd_top(q) and not B.fps[q['ref']]['hand']]
                 for q in pads:
                     if via_justify.is_decap(B, q): drop(q, 'decoupling cap')
                 if any(q['drill'] for q in c['pads']): continue                       # a through-hole pad already reaches the layer
@@ -72,10 +72,14 @@ def run(B, ground=False, supply=False, testpoints=False, signals=(), log=print):
                 if not any(drop(q, 'supply piece', report=False) for q in order) and pads:
                     failed.append(dict(pad='+'.join(checks.label(q) for q in pads), net=net, why='no legal via anywhere in this piece'))
     for net in signals:                                                              # a signal that must leave the top layer: one via IN a pad per top-layer piece
-        for c in tl.components(B, net):
-            pads = [q for q in c['pads'] if smd_top(q) and q['ref'] not in bd.NO_VIA_REFS and not checks.is_tp(q)]
+        comps = tl.components(B, net)
+        for c in comps:
+            pads = [q for q in c['pads'] if smd_top(q) and not B.fps[q['ref']]['hand'] and not checks.is_tp(q)]
             if any(q['drill'] for q in c['pads']) or c['vias'] or any(has_via(B, q) for q in pads) or not pads: continue
-            order = sorted(pads, key=lambda q: (q['ref'][0] in 'UQ', -min(q['w'], q['h'])))  # passives before IC and transistor pins, bigger pads first
+            rest = [(o['x'], o['y']) for d in comps if d is not c for o in d['pads'] if not checks.is_tp(o)]
+            reach = lambda q: min((math.dist((q['x'], q['y']), o) for o in rest), default=0.0)
+            # passives before IC and transistor pins, then the pad nearest the rest of the net (the L3 join starts there), then bigger pads
+            order = sorted(pads, key=lambda q: (q['ref'][0] in 'UQ', reach(q), -min(q['w'], q['h'])))
             if not any(drop(q, 'signal leaves the top layer', report=False) for q in order):
                 failed.append(dict(pad='+'.join(checks.label(q) for q in pads), net=net, why='no legal via in any pad of this piece'))
     if testpoints:
