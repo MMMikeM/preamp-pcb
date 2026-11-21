@@ -19,6 +19,17 @@ def bare(_bare): return copy.deepcopy(_bare)
 def linked(_linked): return copy.deepcopy(_linked)
 def track(B, net, pts, w=0.2, layer='F.Cu'): B.add([B.seg_text(*pts[k], *pts[k + 1], w, layer, net) for k in range(len(pts) - 1)])
 def spot(x, y, r=0.1): return dict(geom=Point(x, y).buffer(r), anchors=[(x, y, 'spot')])
+@pytest.fixture
+def work(tmp_path, monkeypatch):
+    """stage_route pointed at a scratch work folder"""
+    monkeypatch.setattr(stage_route, 'WORK', str(tmp_path)); monkeypatch.setattr(stage_route, 'BOARD', str(tmp_path / 'board.kicad_pcb')); return tmp_path
+def ends(B, n): return [p for p in B.pads if p['net'] == n and not checks.is_tp(p)]
+def straight(B, n): a, b = ends(B, n); track(B, n, [(a['x'], a['y']), (b['x'], b['y'])])
+def close_pairs(B):
+    """signal nets of two top-layer pads under 5 mm apart whose straight top track passes the pass-1 judging"""
+    def fits(n): C = copy.deepcopy(B); straight(C, n); return stage_route.judge_top(C, n, {x['uuid'] for x in B.segs}) is None
+    return [n for n in B.nets if bd.is_signal(n) and len(ends(B, n)) == 2 and all('F.Cu' in p['layers'] for p in ends(B, n))
+            and math.dist(*[(p['x'], p['y']) for p in ends(B, n)]) < 5 and fits(n)]
 
 def test_reader_counts():
     B = bd.Board(OLD); assert len(B.vias) == 137 and len(B.fps) > 150 and B.copper_layers == ['F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu']
@@ -120,8 +131,8 @@ def test_mirror_keeps_the_twin_when_the_source_has_no_routing(bare):
     assert len([s for s in bare.segs if s['net'] == t['twin']]) == 1
 def test_stage_fails_when_a_script_it_runs_fails():
     with pytest.raises(stage_route.StepFailed): stage_route.sh([sys.executable, '-c', 'import sys; sys.exit(3)'])
-def test_only_final_fails_on_unconnected_nets(bare, tmp_path, monkeypatch):
-    monkeypatch.setattr(stage_route, 'WORK', str(tmp_path)); monkeypatch.setattr(stage_route, 'BOARD', str(tmp_path / 'board.kicad_pcb')); bare.save(stage_route.BOARD)
+def test_only_final_fails_on_unconnected_nets(bare, work, monkeypatch):
+    bare.save(stage_route.BOARD)
     unfinished = dict({k: [] for k in checks.FAIL + checks.FINAL}, unconnected=[dict(net='X')], stats=dict(tracks=0, vias=0))
     monkeypatch.setattr(checks, 'report', lambda B, justify=True, timing=None: unfinished)
     assert stage_route.finish('check', False) == 0 and stage_route.finish('check', False, final=True) == 1
@@ -139,8 +150,8 @@ def test_a_via_in_a_through_hole_pad_is_a_hole_error(bare):
     assert checks.holes(bare) == []
     bare.add([bare.via_text(p['x'], p['y'], 0.6, 0.3, p['net'])])
     assert len(checks.holes(bare)) == 1
-def test_a_failed_step_puts_the_board_back(bare, tmp_path, monkeypatch):
-    monkeypatch.setattr(stage_route, 'WORK', str(tmp_path)); monkeypatch.setattr(stage_route, 'BOARD', str(tmp_path / 'board.kicad_pcb')); bare.save(stage_route.BOARD)
+def test_a_failed_step_puts_the_board_back(bare, work, monkeypatch):
+    bare.save(stage_route.BOARD)
     good = open(stage_route.BOARD, 'rb').read()
     def step_that_breaks(step, src):
         B = bd.Board(stage_route.BOARD); track(B, 'X', [(110, 100), (111, 100)]); B.save(); raise stage_route.StepFailed('broke')
@@ -149,7 +160,7 @@ def test_a_failed_step_puts_the_board_back(bare, tmp_path, monkeypatch):
     monkeypatch.setattr(sys, 'argv', ['stage_route.py', '2b'])
     with pytest.raises(SystemExit) as e: stage_route.main()
     assert e.value.code == 1 and open(stage_route.BOARD, 'rb').read() == good
-    assert open(tmp_path / '2b.kicad_pcb', 'rb').read() != good
+    assert open(work / '2b.kicad_pcb', 'rb').read() != good
 def test_a_copy_that_would_collide_is_skipped_and_its_twin_kept(bare):
     pad = lambda ref, num: next(p for p in bare.pads if p['ref'] == ref and p['num'] == num)
     a, b = pad('Q101', '3'), pad('U1', '2'); shift = bd.channel_shift(bare)                # /Neck/DA, whose twin is /Bridge/DA shifted
@@ -160,6 +171,9 @@ def test_a_copy_that_would_collide_is_skipped_and_its_twin_kept(bare):
     crowded = checks.clearances(bare); todo, skipped = mirror_route.run(bare)                # the stub itself may crowd a pad
     assert '/Neck/DA' not in [t['net'] for t in todo] and any(s['net'] == '/Neck/DA' and 'STAYING' in s['why'] for s in skipped)
     assert not [s for s in bare.segs if s['net'] == '/Bridge/DA'] and checks.clearances(bare) == crowded
+def test_a_track_marked_locked_no_is_locked_for_the_router(linked):
+    B, _ = linked; u = B.segs[0]['uuid']; B.text = B.text.replace(f'(uuid "{u}")', f'(locked no)\n\t\t(uuid "{u}")', 1); B._parse()
+    assert not B.segs[0]['locked'] and B.lock([u]) == [u] and B.segs[0]['locked']
 def test_lock_and_unlock_leave_the_file_as_it_was(linked):
     B, _ = linked; before = B.text; mine = B.lock([s['uuid'] for s in B.segs])
     assert mine and all(s['locked'] for s in B.segs)
@@ -200,8 +214,8 @@ def test_supply_track_is_refused_where_it_would_crowd_other_copper(bare):
     bare.add([bare.via_text(107, 100.5, 0.6, 0.3, 'GND')]); assert not supply5.track_fits(bare, 'V+', 'In2.Cu', path)
 def test_channel_shift_is_read_from_the_placement(bare):
     assert bd.channel_shift(bare) == 19.45
-def test_a_killed_router_call_leaves_no_locks(linked, tmp_path, monkeypatch):
-    B, _ = linked; monkeypatch.setattr(stage_route, 'WORK', str(tmp_path)); monkeypatch.setattr(stage_route, 'BOARD', str(tmp_path / 'board.kicad_pcb'))
+def test_a_killed_router_call_leaves_no_locks(linked, work):
+    B, _ = linked
     clean = B.text; ours = B.lock([s['uuid'] for s in B.segs]); B.save(stage_route.BOARD)
     import json; json.dump(ours, open(stage_route.held_file(), 'w'))                     # the state a killed call leaves behind
     stage_route.release_held()
@@ -251,34 +265,30 @@ def test_copy_report_pairs_the_swapped_op_amp_nets_by_function_not_by_pin():
     assert report() == {'Net-(Q103-C)': None, '/Neck/BO': None, '/Neck/OBN': ['/Bridge/OBN'], 'Net-(U3B--)': None}
     for n in SWAPPED.values(): join(n)
     assert report() == {a: [b] for a, b in SWAPPED.items()}
-def _fake_router(B, tmp_path, monkeypatch):
-    monkeypatch.setattr(stage_route, 'WORK', str(tmp_path)); monkeypatch.setattr(stage_route, 'BOARD', str(tmp_path / 'board.kicad_pcb')); monkeypatch.setenv('ROUTER_DIR', str(tmp_path))
-    B.save(stage_route.BOARD); calls = []
+def _fake_router(B, work, monkeypatch):
+    monkeypatch.setenv('ROUTER_DIR', str(work)); B.save(stage_route.BOARD); calls = []
     def run(cmd, cwd):                                                                  # adds nothing, so every open net stays open
         A = bd.Board(stage_route.BOARD); calls.append((cmd, {x['net'] for x in A.segs + A.vias if x['locked']}))
         import shutil; shutil.copy(stage_route.BOARD, stage_route.BOARD + '.tmp'); return dict(returncode=0)
     monkeypatch.setattr(stage_route, 'run_router', run); return calls
-def test_the_retry_after_widened_clearances_drops_the_wider_default_too(linked, tmp_path, monkeypatch):
-    B, _ = linked; calls = _fake_router(B, tmp_path, monkeypatch); n = next(n for n in B.nets if n.startswith('/Neck/') and checks.top_incomplete(B, n))
-    stage_route.router([n], ['F.Cu'], ['--via-cost', '150', '--clearance', '0.3'], clearances=str(tmp_path / 'wide.json'))
+def test_the_retry_after_widened_clearances_drops_the_wider_default_too(linked, work, monkeypatch):
+    B, _ = linked; calls = _fake_router(B, work, monkeypatch); n = next(n for n in B.nets if n.startswith('/Neck/') and checks.top_incomplete(B, n))
+    assert stage_route.router([n], ['F.Cu'], ['--clearance', '0.3'], clearances=str(work / 'wide.json')) == [n]
+    assert len(calls) == 1                                                              # 2d's bias call: the widened clearance is what keeps it out of the fingers
+    calls.clear(); stage_route.wide_then_standard([n], 'test')
     assert len(calls) == 2 and '--clearance' in calls[0][0][calls[0][0].index('--via-cost'):]
     assert calls[1][0][calls[1][0].index('--clearance') + 1] == str(bd.CLEAR) and '0.3' not in calls[1][0]
-def test_add_only_locks_the_given_nets_own_copper_for_the_call(linked, tmp_path, monkeypatch):
-    B, _ = linked; calls = _fake_router(B, tmp_path, monkeypatch); n = B.segs[0]['net']
+def test_add_only_locks_the_given_nets_own_copper_for_the_call(linked, work, monkeypatch):
+    B, _ = linked; calls = _fake_router(B, work, monkeypatch); n = B.segs[0]['net']
     stage_route.router([n], ['F.Cu']); assert n not in calls[0][1]
     stage_route.router([n], ['F.Cu'], add_only=True); assert n in calls[1][1]
     assert not any(x['locked'] for x in bd.Board(stage_route.BOARD).segs if x['net'] == n)
-def test_top_first_keeps_only_nets_that_join_within_the_rules(bare, tmp_path, monkeypatch):
-    monkeypatch.setattr(stage_route, 'WORK', str(tmp_path)); monkeypatch.setattr(stage_route, 'BOARD', str(tmp_path / 'board.kicad_pcb')); monkeypatch.setenv('ROUTER_DIR', str(tmp_path))
-    def ends(n): return [p for p in bare.pads if p['net'] == n and not checks.is_tp(p)]
-    two = [n for n in bare.nets if not bd.is_hz(n) and not bd.is_supply(n) and n != 'GND' and len(ends(n)) == 2 and math.dist(*[(p['x'], p['y']) for p in ends(n)]) < 5]
-    def fits(n):
-        B = copy.deepcopy(bare); a, b = ends(n); track(B, n, [(a['x'], a['y']), (b['x'], b['y'])]); return stage_route.judge_top(B, n, {x['uuid'] for x in bare.segs})
-    good = next(n for n in two if fits(n) is None); detour, still = [n for n in two if n != good][:2]
+def test_top_first_keeps_only_nets_that_join_within_the_rules(bare, work, monkeypatch):
+    monkeypatch.setenv('ROUTER_DIR', str(work)); good, detour, still = close_pairs(bare)[:3]
     bare.save(stage_route.BOARD)
     def run(cmd, cwd):                                                                  # joins one net straight, one by a long detour, and leaves one open
-        B = bd.Board(stage_route.BOARD); a, b = ends(good); track(B, good, [(a['x'], a['y']), (b['x'], b['y'])])
-        a, b = ends(detour); track(B, detour, [(a['x'], a['y']), (a['x'], a['y'] - 15), (b['x'], b['y'])]); B.save(stage_route.BOARD + '.tmp'); return dict(returncode=0)
+        B = bd.Board(stage_route.BOARD); straight(B, good)
+        a, b = ends(B, detour); track(B, detour, [(a['x'], a['y']), (a['x'], a['y'] - 15), (b['x'], b['y'])]); B.save(stage_route.BOARD + '.tmp'); return dict(returncode=0)
     monkeypatch.setattr(stage_route, 'run_router', run)
     stage_route.top_first([good, detour, still], 'test')
     B = bd.Board(stage_route.BOARD); routed = {s['net'] for s in B.segs}
@@ -291,3 +301,17 @@ def test_a_neighbour_link_goes_round_a_track_placed_before_it(bare, linked):
     crowded = checks.clearances(bare); again = neighbour_links.run(bare, nets=['V+'], log=lambda *_: None)
     assert checks.clearances(bare) == crowded
     assert all(y['length'] > x['length'] + 0.5 for y in again if {y['a'], y['b']} == {x['a'], x['b']})
+def test_a_pair_joined_through_vias_with_a_free_top_path_is_routed_on_top_again(bare, work, monkeypatch):
+    monkeypatch.setenv('ROUTER_DIR', str(work)); good, bad = close_pairs(bare)[:2]
+    for n in (good, bad):                                                               # each joined by a via in both pads and a track on L3
+        a, b = ends(bare, n); bare.add([bare.via_text(p['x'], p['y'], 0.45, 0.2, n) for p in (a, b)]); track(bare, n, [(a['x'], a['y']), (b['x'], b['y'])], layer='In2.Cu')
+    bare.save(stage_route.BOARD); assert {x['net'] for x in via_justify.check(bare, nets=[good, bad])} == {good, bad}
+    def run(cmd, cwd):                                                                  # the top route is found for one net only
+        B = bd.Board(stage_route.BOARD); n = cmd[cmd.index('--nets') + 1]
+        if n == good: straight(B, good)
+        B.save(stage_route.BOARD + '.tmp'); return dict(returncode=0)
+    monkeypatch.setattr(stage_route, 'run_router', run)
+    stage_route.top_again([good, bad], 'test')
+    B = bd.Board(stage_route.BOARD)
+    assert not [v for v in B.vias if v['net'] == good] and {s['layer'] for s in B.segs if s['net'] == good} == {'F.Cu'}
+    assert len([v for v in B.vias if v['net'] == bad]) == 2 and not checks.top_incomplete(B, bad)

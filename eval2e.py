@@ -1,10 +1,10 @@
-import sys,math; sys.path.insert(0,'.');sys.path.insert(0,'../mike')
+import sys,math,os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # board.py and r6render.py sit beside this file
 import board as bd, checks, mirror_route, r6render as R
 import matplotlib.pyplot as plt
 from shapely.geometry import LineString
 from shapely.ops import unary_union
-w=sys.argv[1]; B=bd.Board(f'{w}/board.kicad_pcb'); X,Y=100,80; later=mirror_route.waits_for_copy(B)
-sig=lambda n: not bd.is_supply(n) and n!='GND' and not bd.is_hz(n)
+w=sys.argv[1]; B=bd.Board(f'{w}/board.kicad_pcb'); later=mirror_route.waits_for_copy(B)
+sig=bd.is_signal
 ln=lambda l,f=lambda n:True:round(sum(math.dist((s['x1'],s['y1']),(s['x2'],s['y2'])) for s in B.segs if s['layer']==l and f(s['net'])),1)
 hz=unary_union([g for n_,g,k,o in B.copper('F.Cu') if bd.is_hz(n_)]).buffer(1.0)
 for n in sorted({s['net'] for s in B.segs if sig(s['net'])}):

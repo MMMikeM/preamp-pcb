@@ -5,7 +5,7 @@ V+: a finger at each strip's V+ column, one down the middle, joined by a bar alo
     gets ONE crossing on L3. Vias inside a zone need nothing; a via outside gets one straight stub to the nearest scaffold track.
 Bias nets are routed afterwards by the router, kept clear of the zones (net clearance widened to the half-width).
 usage: supply5.py IN OUT --nc OUT_net_clearances.json"""
-import os, sys, json, uuid, argparse, math
+import os, json, uuid, argparse, math
 import board as bd
 from shapely.geometry import box, Point, LineString
 from shapely.ops import unary_union, nearest_points
@@ -18,7 +18,6 @@ LINES = {'V-': [((6.0, 8.4), (21.3, 8.4)), ((6.0, 8.4), (6.0, 23.9)), ((21.3, 8.
                 ((51.9, 26.4), (68.1, 26.4)), ((68.1, 11.8), (68.1, 26.4)), ((32.45, 18.7), (32.45, 38.55))]}
 HOP_TOP = 14.3                                             # top of the V+ finger the crossing lands on
 SOURCE = ('C301', 'V+')                                    # the V+ source pad above the V- bar; its via hops on L3 into the V+ finger at x = 51.9
-def zones(): return BOX
 def zone_text(net, poly, name):
     pts = ' '.join(f'(xy {x + X:.3f} {y + Y:.3f})' for x, y in list(poly.exterior.coords)[:-1])
     return (f'\n\t(zone\n\t\t(net "{net}")\n\t\t(layer "{L5}")\n\t\t(uuid "{uuid.uuid4()}")\n\t\t(name "{name}")\n\t\t(hatch edge 0.5)\n\t\t(priority 2)\n'
@@ -54,7 +53,9 @@ def run(B, log=print):
             else: raise SystemExit(f'no straight stub for {n} via at ({p.x:.1f},{p.y:.1f})')
         for i, g in enumerate(Z[n].geoms if Z[n].geom_type == 'MultiPolygon' else [Z[n]]): out.append(zone_text(n, g, f'{n}_In4_{i}'))
     # the one crossing: source via -> L3 -> a new via on the V+ finger at x = 51.9, as close below the V- bar as both the via and the L3 track are legal
-    src = next(q for q in B.fps[SOURCE[0]]['pads'] if q['net'] == 'V+'); sv = next(v for v in B.vias if v['net'] == 'V+' and abs(v['x'] - src['x']) < 0.6 and abs(v['y'] - src['y']) < 0.6)
+    src = next((q for q in B.fps[SOURCE[0]]['pads'] if q['net'] == 'V+'), None) if SOURCE[0] in B.fps else None
+    sv = src and next((v for v in B.vias if v['net'] == 'V+' and abs(v['x'] - src['x']) < 0.6 and abs(v['y'] - src['y']) < 0.6), None)
+    if not sv: raise SystemExit(f'no V+ via on {SOURCE[0]} to start the L3 crossing from')
     B.add(out); out = []; P = drops.Placer(B); a = (sv['x'] - X, sv['y'] - Y); found = None        # this run's own copper is on the board before the crossing is judged against it
     for k in range(0, 200):
         land = (51.9, HOP_TOP - 0.5 + 0.05 * k); d = abs(land[0] - a[0])
@@ -65,7 +66,7 @@ def run(B, log=print):
     for p, q in zip(path, path[1:]): S('V+', p, q, L3)
     if land[1] < HOP_TOP - 0.01: S('V+', land, (51.9, HOP_TOP))
     log(f'V+ crossing on L3: ({a[0]:.2f},{a[1]:.2f}) -> ({land[0]:.2f},{land[1]:.2f}), {math.dist(a, land):.1f} mm')
-    B.add(out); trim_centres(B, log); return []
+    B.add(out); trim_centres(B, log)
 def is_centre(B, s):
     """A scaffold track: the filled zone makes it redundant, so a via may land on it (see trim_centres)."""
     if s.get('layer') != L5 or s.get('net') not in LINES or abs(s['w'] - W) > 1e-6: return False
@@ -94,8 +95,7 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser(); ap.add_argument('inp'); ap.add_argument('out'); ap.add_argument('--nc'); a = ap.parse_args()
     B = bd.Board(a.inp)
     # R6_SKIP_SUPPLY=1 skips the supply shapes, for comparing signal routing between placements
-    todo = [] if os.environ.get('R6_SKIP_SUPPLY') else run(B)
+    if not os.environ.get('R6_SKIP_SUPPLY'): run(B)
     B.save(a.out)
     if a.nc:
-        import os; nc = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'net_clearances.json'))); nc.update({'V+': HW - W / 2 + bd.CLEAR, 'V-': HW - W / 2 + bd.CLEAR}); json.dump(nc, open(a.nc, 'w'), indent=1)
-    print('TODO', *todo)
+        nc = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'net_clearances.json'))); nc.update({'V+': HW - W / 2 + bd.CLEAR, 'V-': HW - W / 2 + bd.CLEAR}); json.dump(nc, open(a.nc, 'w'), indent=1)

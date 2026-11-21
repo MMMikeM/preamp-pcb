@@ -8,7 +8,7 @@ import board as bd, toplink as tl
 RATIO = 1.5; EXTRA = 1.0; MAX_GAP = 4.0          # via_justify judges the supply rails and bias nets by these same three, so the step and its check agree
 def widths(net): return (0.4, 0.3, 0.2) if bd.is_supply(net) else (0.2,)
 
-def run(B, max_gap=MAX_GAP, nets=None, include_hz=False, dry=False, log=print, ratio=RATIO, extra=EXTRA):
+def run(B, max_gap=MAX_GAP, nets=None, include_hz=False, dry=False, log=print):
     added = []; failed = set()
     todo = [n for n in (nets or B.nets) if n not in bd.GROUND and (include_hz or not bd.is_hz(n))]
     while True:
@@ -21,7 +21,7 @@ def run(B, max_gap=MAX_GAP, nets=None, include_hz=False, dry=False, log=print, r
         cand.sort(key=lambda c: c[0]); done = None
         for g, net, a, b, pa, pb in cand:
             if (net, pa[2], pb[2], round(g, 3)) in failed: continue
-            comps = tl.components(B, net); lim = max(ratio * g, g + extra)
+            comps = tl.components(B, net); lim = max(RATIO * g, g + EXTRA)
             for w in widths(net):
                 r = tl.top_path(B, net, comps[a], comps[b], w, max_len=lim)
                 if r and r[0] <= lim:

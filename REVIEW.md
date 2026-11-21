@@ -1,70 +1,62 @@
-# route6: reviewer feedback (21 Nov 2026)
+# route6: reviewer feedback (21 Nov 2026, evening)
 
-Reply to `FEEDBACK_21NOV.md`. Earlier rounds are in git (`0eced4c` and before). How to run the pipeline is in `README.md`.
+Reply to `FEEDBACK_21NOV_PM.md`. Earlier rounds are in git (`6c27adb` and before). How to run the pipeline is in `README.md`.
 
 ## Basis
 - Router: KiCadRoutingTools v0.24.1 (`31049fd`).
-- Board: `fixtures/landscape-74f5949`, run setup to 2i with `R6_SKIP_SUPPLY=1` and `BIAS_L3_COST=1.0`. 2i fails only on V+
-  and V-, as expected with supply skipped.
-- 46 tests pass with `ROUTER_DIR` set.
+- Board: `fixtures/landscape-eacfa31`, setup to 2i, `R6_SKIP_SUPPLY=1`, `BIAS_L3_COST=1.0`. 2i fails only on V+ and V-.
+- 48 tests pass with `ROUTER_DIR` set.
 
-## The U3/U4 unit swap: nothing maps it wrongly
-Checked every place that pairs one channel with the other, by running it on the fixture:
-- `mirror_route.plan` (2h's copy) pairs pads by position and copies a net only if every pad lands on one twin net. The four
-  nets on the swapped pins (`Net-(Q103-C)`, `/Neck/BO`, `/Neck/OBN`, `Net-(U3B--)`) are refused both ways. With the bridge
-  made an exact shifted copy of the neck in memory they are still refused, because each lands on two nets, while
-  `/Neck/OA`, `DA`, `DB` and `OB` copy as they should.
-- `other_side` (the "already routed on the other channel" report) maps by pad number, but only between `X1nn` and `X2nn`
-  parts. U3 and U4 never match, and the passives kept their pins. It gives the function twin for all 39 nets, both ways.
-- `waits_for_copy`, `checks.symmetry` and `board.channel_shift` don't look at nets on U3/U4.
+## Flagged vias routed again on top: built
+At the end of `route_signals` (so in 2e and 2i), `top_again` takes each pair `via_justify` flags on a signal net:
+1. It removes the pair's vias and the inner-layer track joined to them.
+2. It routes the net on F.Cu alone, with no vias, its remaining copper locked.
+3. It keeps the result only if the whole net is joined and passes `judge_top`; otherwise the board goes back.
 
-Mapping by net name would be wrong here: a copy of Q103-C onto Q203-C would end on U4.6, which is `Net-(U4B--)`. The real
-cost of the swap is that the four bridge nets always wait for 2i. Two tests pin this on the fixture.
+Left out: supply, battery, ground and high-impedance nets (`/BAT-` is routed on L5 by design), nets with locked copper, and
+pairs whose inner-layer track also serves a third pad (another via or a through-hole pad). A router failure inside a retry
+puts the board back and carries on; it no longer fails the step.
 
-Seen in passing: `channel_shift` gives 52.44 on this placement (10 parts against 9 for 52.45), inside the copy's 0.03 mm
-tolerance.
+On `eacfa31`:
 
-## P2/P4 before supply links: built as step 2p
-`setup -> 2a -> 2p -> 2b -> ...`. 2p routes the P2_FrontEnd and P4_Stage2 nets on the top layer with no vias, in three
-router calls: drains, then the second stage, then the rest of the front end. Copy targets are left to 2h; the bridge's
-untwinned nets are routed here. A net is kept only if it joins and passes the same judging as 2e's pass 1 (length,
-squeeze, high-impedance keep-away, now one function, `judge_top`); the rest is removed and left for 2e. The classes come
-from the `.kicad_pro` beside the source board, which setup saves to `work/net_classes.json`.
-
-Rule 2 (keep supply links 0.4 mm from P2/P4 copper) is not built. With P2/P4 down first, a 2b link can only route round
-them; rule 2 would only widen the gap from 0.2 to 0.4 mm, which a decoupled rail doesn't need, and `via_justify` would then
-flag the vias of every link it refused unless it learned the same rule. A test covers "a link goes round a track placed
-before it".
-
-### On the fixture, against the same pipeline without 2p
-| | Without 2p | With 2p |
+| | Your run | With `top_again` |
 |---|---|---|
-| Neck signal track / vias | 427 mm / 16 | 425 mm / 15 |
-| Bridge signal track / vias | 436 mm / 19 | 428 mm / 14 |
-| `/Neck/DB` | 18 mm, 2 vias | 12.2 mm, 0 vias |
-| `Net-(Q203-C)` | 14.7 mm, 0 vias | 12.4 mm, 0 vias |
-| Nets copied in 2h | 19 | 19 |
+| Neck | 429 mm / 14 vias | 429 mm / 14 vias |
+| Bridge | 432 mm / 16 vias | 428 mm / 14 vias |
+| `/Bridge/BO` | 19 mm, 2 vias | 15.1 mm, 0 vias |
 
-Costs: `/Bridge/OBN` +6 mm (one via fewer), `/Neck/OB` one via more. Left for 2e by 2p: `Net-(Q103-B)` (41 mm on top for a
-9 mm tree), `Net-(Q103-E)`, `/Bridge/SA` and `/Neck/SB` (too long on top), `/Bridge/SB` (squeezed at Q202).
+`/Bridge/SB` was retried and not kept: the top route did not join. Unjustified vias at the end of 2i: 2 (`/BAT-`, `/Bridge/SB`).
 
-### Your acceptance check
-R127 and C112 each moved 0.1 mm, setup to 2i: only the nets on those two parts changed (`/OUT_NK`, `/Neck/BO`, a GND
-via). Q203-C and every other net were identical.
+## Code review and simplify pass over the whole branch
+Fixed from the review:
+- The standard-clearance retry ran for any router call given a clearance file, including 2d's bias call, where the
+  widened V+/V- clearance is what keeps REF and PB out of the fingers. It now lives in pass 3 only (`wide_then_standard`).
+- Pass 4's L3 join now locks the pad vias it just placed, as pass 2 does.
+- A crash or Ctrl-C mid-step now puts the board back, as a `StepFailed` does.
+- `Board.lock` treated `(locked no)` as locked.
+- `supply5.py` stops with a message, not a `StopIteration`, when C301 has no V+ via.
+- `eval2e.py` finds its modules from its own folder, not the working directory and `../mike`.
 
-## Why Q203-C moved between your runs D and E: not found
-The router is deterministic, so I tested whether one channel's routing can reorder the other's inside a shared router
-call. Three tests say no on this fixture: the R127 nudge without 2p changed only R127's nets; re-routing two neck nets
-inside the shared 2i call changed no bridge net; and 2p with a call per region gave the same board as one call. So I did
-not split calls by region. R127 and C112 are 38 to 41 mm from Q203-C and their nets are not copied, so the copy can't carry
-a change across either. Whatever moved it in E, it is not on this fixture.
+Not changed: `drops.py` exiting 2 when a pad gets no via still fails 2c and 2d. A ground or supply pad joins its plane only
+through a via, so failing there is right.
 
-## Your branch's code changes
-- Pass 2's L3 join with `add_only=True`: agreed and kept; no completion was lost in any run here.
-- `R6_SKIP_SUPPLY` and `compare_channels.py`: kept, and used for every comparison above.
+Simplify: one helper each for things written several times in `stage_route.py` (removing new copper, length against tree,
+the top-layer judging with "open", pad vias then L3, the router argument lists), the board's own via and track shapes,
+`bd.is_signal` and `bd.is_battery`, and dead code removed (`drops.via_size`, unused parameters in `board.py`,
+`neighbour_links.py` and `r6render.py`, `supply5.zones`, `supply5`'s empty TODO list, unused imports). The test file has
+one work-folder fixture and shared helpers. A full `eacfa31` run before and after gives the same board at every step.
+
+Log changes: pass 2 and pass 4 now print and count in the same form (`2e pass 4 pad vias` and so on), and the pass-4
+counters are named like pass 2's.
+
+## For you
+- **`R6_SKIP_SUPPLY` still widens V+/V- for the bias call.** The switch skips the fingers, but `supply5.py --nc` still
+  writes V+/V- at 1.4 mm, so in every comparison run so far REF and PB kept 1.4 mm from V+/V- copper on a board with no
+  fingers. Moving the `--nc` block under the same switch would fix it, but it changes your comparison numbers, so it's
+  your call.
+- **`/VR` is not a bias net to the code.** `board.BIAS` has `'VR'`, but the net is `/VR` on every board, so
+  `is_supply('/VR')` is false and it is routed as a signal. The `.kicad_pro` puts `/VR` in P6_Bias. Which one is right?
+- `supply5_portrait.py` and `spine.py` are not imported or run by anything. Delete them if they're done with.
 
 ## Not done
-- Partial copy: still the largest gain.
-- Bias tracks blocking the copy.
-- Supply shapes from pad positions.
-- `/Neck/CLD` and the five loose test points from the last round are with you.
+- Partial copy, bias tracks blocking the copy, supply shapes from pad positions.

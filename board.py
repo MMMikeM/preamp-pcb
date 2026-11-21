@@ -26,7 +26,9 @@ def is_hz(net): return net.split('/')[-1] in HZ_SUFFIX
 GROUND = {'GND'}
 RAILS = {'V+', 'V-'}
 BIAS = {'REF', 'PB', 'VR'}
-def is_supply(net): return net in RAILS or net in BIAS or 'BAT' in net
+def is_battery(net): return 'BAT' in net
+def is_supply(net): return net in RAILS or net in BIAS or is_battery(net)
+def is_signal(net): return net not in GROUND and not is_supply(net) and not is_hz(net)
 NO_VIA_REFS = {'R109', 'R117', 'R209', 'R217'}          # hand-swapped parts: no via in their pads
 LAYERS6 = ['F.Cu', 'In1.Cu', 'In2.Cu', 'In3.Cu', 'In4.Cu', 'B.Cu']   # L1..L6
 CLEAR = 0.2; CLEAR_HZ = 0.4
@@ -133,14 +135,14 @@ class Board:
     # ---- text-level edits (keeps everything else in the file byte-identical)
     @staticmethod
     def _f(v): return ('%.4f' % v).rstrip('0').rstrip('.')
-    def seg_text(self, x1, y1, x2, y2, w, layer, net, uuid=None):
+    def seg_text(self, x1, y1, x2, y2, w, layer, net):
         f = self._f
         return (f'\t(segment\n\t\t(start {f(x1)} {f(y1)})\n\t\t(end {f(x2)} {f(y2)})\n\t\t(width {f(w)})\n\t\t(layer "{layer}")\n'
-                f'\t\t(net "{net}")\n\t\t(uuid "{uuid or _uuid.uuid4()}")\n\t)\n')
-    def via_text(self, x, y, size, drill, net, layers=('F.Cu', 'B.Cu'), uuid=None):
+                f'\t\t(net "{net}")\n\t\t(uuid "{_uuid.uuid4()}")\n\t)\n')
+    def via_text(self, x, y, size, drill, net, layers=('F.Cu', 'B.Cu')):
         f = self._f
         return (f'\t(via\n\t\t(at {f(x)} {f(y)})\n\t\t(size {f(size)})\n\t\t(drill {f(drill)})\n\t\t(layers "{layers[0]}" "{layers[1]}")\n'
-                f'\t\t(net "{net}")\n\t\t(uuid "{uuid or _uuid.uuid4()}")\n\t)\n')
+                f'\t\t(net "{net}")\n\t\t(uuid "{_uuid.uuid4()}")\n\t)\n')
     def add(self, chunks):
         i = self.text.rstrip().rfind(')'); self.text = self.text[:i] + ''.join(chunks) + ')\n'; self._parse()
     def _track_blocks(self):
@@ -172,7 +174,11 @@ class Board:
     def lock(self, uuids):
         """Marks these tracks and vias as locked, the way KiCad does. Returns the ones it locked: a piece that was locked already is
         not in the list, so handing the list to unlock() leaves the user's own locks alone."""
-        return self._rewrite(uuids, lambda blk: blk if re.search(r'\blocked\b', blk) else re.sub(r'(\n\t\t)(\(layers? )', r'\1(locked yes)\1\2', blk, count=1))
+        def edit(blk):
+            if re.search(r'\(locked(?: yes| true)?\)|\((?:segment|via) locked\b', blk): return blk
+            if '(locked no)' in blk: return blk.replace('(locked no)', '(locked yes)', 1)
+            return re.sub(r'(\n\t\t)(\(layers? )', r'\1(locked yes)\1\2', blk, count=1)
+        return self._rewrite(uuids, edit)
     def unlock(self, uuids):
         return self._rewrite(uuids, lambda blk: blk.replace('\n\t\t(locked yes)', '', 1))
     def save(self, path=None, crlf=None):

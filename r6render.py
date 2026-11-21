@@ -1,10 +1,10 @@
-import sys,json,math
+import sys
 import os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # board.py sits beside this file
 import board as bd
 import matplotlib;matplotlib.use('Agg');import matplotlib.pyplot as plt
 COL={'hz':'#c0392b','supply':'#e67e22','signal':'#2471a3','gnd':'#7f8c8d'}
 def cls(n): return 'gnd' if n=='GND' else 'hz' if bd.is_hz(n) else 'supply' if bd.is_supply(n) else 'signal'
-def draw(ax,B,layer,win,title,labels=True,hl=None,netlabels=False):
+def draw(ax,B,layer,win,title,labels=True,netlabels=False):
     for r,f in B.fps.items():
         for p in f['pads']:
             if layer not in p['layers']: continue
@@ -16,11 +16,9 @@ def draw(ax,B,layer,win,title,labels=True,hl=None,netlabels=False):
             ax.text(f['x']-100,f['y']-80,r,fontsize=4.5,ha='center',va='center',zorder=7,color='#333')
         if netlabels and layer=='F.Cu' and f['layer']=='F.Cu' and win[0]<f['x']-100<win[1] and win[2]<f['y']-80<win[3]:
             ax.text(f['x']-100,f['y']-80,r,fontsize=6.5,ha='center',va='center',zorder=8,weight='bold',color='#111',bbox=dict(fc='w',ec='none',alpha=0.6,pad=0.3))
-    sc=ax.figure.dpi/72
     for s in B.segs:
         if s['layer']!=layer: continue
         c=COL[cls(s['net'])]
-        if hl and (s['uuid'] in hl): c='#8e44ad'
         ax.plot([s['x1']-100,s['x2']-100],[s['y1']-80,s['y2']-80],color=c,lw=max(s['w']*ax._mmpt,0.6),solid_capstyle='round',zorder=4)
     for v in B.vias:
         ax.add_patch(plt.Circle((v['x']-100,v['y']-80),v['size']/2,fc=COL[cls(v['net'])],ec='k',lw=0.3,zorder=5)); ax.add_patch(plt.Circle((v['x']-100,v['y']-80),v['drill']/2,fc='w',ec='none',zorder=6))

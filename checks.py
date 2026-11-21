@@ -86,11 +86,11 @@ def clearances(B, eps=bd.TOL):
     return out
 
 def holes(B, need=bd.HOLE_GAP):
-    H = [(v['x'], v['y'], v['drill'], 'via ' + v['net']) for v in B.vias] + [(p['x'], p['y'], p['drill'], f"{p['ref']}.{p['num']}") for p in B.pads if p['drill']]
+    H = [(v['x'], v['y'], v['drill'], 'via ' + v['net']) for v in B.vias] + [(p['x'], p['y'], p['drill'], label(p)) for p in B.pads if p['drill']]
     out = []
     for a, b in itertools.combinations(H, 2):
         d = math.dist(a[:2], b[:2]) - a[2] / 2 - b[2] / 2
-        if d < need - 1e-3: out.append(dict(a=a[3], b=b[3], d=round(d, 3)))
+        if d < need - bd.TOL: out.append(dict(a=a[3], b=b[3], d=round(d, 3)))
     return out
 
 def edge(B, need=bd.EDGE):
