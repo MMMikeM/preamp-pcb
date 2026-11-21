@@ -192,7 +192,7 @@ def route_signals(nets, step='2e'):
     count(f'{step} pass 2 nets (pad vias + L3)', len(again)); count(f'{step} pad vias', len(added)); count(f'{step} pieces with no legal pad via', len(failed))
     print(f'  pass 2 (pad vias + L3): {again} | {len(added)} pad vias, {len(failed)} pieces with no legal pad via')
     mark = {x['uuid'] for x in B.segs}
-    if again: router(again, ['In2.Cu'], ['--via-cost', '100000'])
+    if again: router(again, ['In2.Cu'], ['--via-cost', '100000'], add_only=True)   # keep the pad vias this pass just placed
     B = bd.Board(BOARD); left = [n for n in again if checks.top_incomplete(B, n)]
     for n in again:                                                           # an L3-only join that had to wander round earlier nets is thrown away: pass 3 may cross with a via instead
         if n in left: continue
