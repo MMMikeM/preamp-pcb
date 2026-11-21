@@ -2,9 +2,8 @@
 It grades against the real board outline and pad shapes and knows checks route6 has no model for (a via in a paste opening
 that the file does not mark filled and capped). route6's own checks stay the inner loop: these need a file, not a Board.
 usage: krt_checks.py BOARD"""
-import os, sys, json, io, contextlib
+import os, sys, io, contextlib
 import board as bd
-HERE = os.path.dirname(os.path.abspath(__file__))
 
 def configured(): return bool(os.environ.get('ROUTER_DIR'))
 
@@ -23,7 +22,7 @@ def _plain(v):
 def report(path):
     """{'krt_drc': violations it does not itself accept, 'krt_unconnected': net names}"""
     check_drc, check_connected = _load()
-    clear = json.load(open(os.path.join(HERE, 'net_clearances.json')))
+    clear = bd.net_clearances()
     with contextlib.redirect_stdout(io.StringIO()):
         found = check_drc.run_drc(path, clearance=bd.CLEAR, hole_to_hole_clearance=bd.HOLE_GAP, board_edge_clearance=bd.EDGE, net_clearances=clear,
                                   clearance_margin_mm=bd.TOL, quiet=True, print_summary=False)

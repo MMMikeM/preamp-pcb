@@ -1,6 +1,6 @@
 """Minimal KiCad .kicad_pcb reader/writer for the route6 scripts. Coordinates are KiCad's own (mm, y down).
 Only what the routing steps need: pads, tracks, vias, zones (names only) and text-level insert/remove of tracks and vias."""
-import re, math, uuid as _uuid
+import os, re, json, math, uuid as _uuid
 import numpy as np
 from shapely.geometry import Point, LineString, box
 from shapely import affinity
@@ -25,7 +25,10 @@ HZ_SUFFIX = ('GA', 'GB', 'GA_M', 'GB_M', 'VB', 'SVN', 'SVP', 'SVN_I', 'SVP_I', '
 def is_hz(net): return net.split('/')[-1] in HZ_SUFFIX
 GROUND = {'GND'}
 RAILS = {'V+', 'V-'}
-BIAS = {'REF', 'PB', 'VR'}
+BIAS = {'REF', 'PB', '/VR'}
+NET_CLEARANCES = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'net_clearances.json')
+def net_clearances(over=None): return dict(json.load(open(NET_CLEARANCES)), **(over or {}))
+def write_clearances(path, over=None): json.dump(net_clearances(over), open(path, 'w'), indent=1); return path
 def is_battery(net): return 'BAT' in net
 def is_supply(net): return net in RAILS or net in BIAS or is_battery(net)
 def is_signal(net): return net not in GROUND and not is_supply(net) and not is_hz(net)

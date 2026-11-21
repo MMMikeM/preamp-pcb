@@ -5,7 +5,7 @@ V+: a finger at each strip's V+ column, one down the middle, joined by a bar alo
     gets ONE crossing on L3. Vias inside a zone need nothing; a via outside gets one straight stub to the nearest scaffold track.
 Bias nets are routed afterwards by the router, kept clear of the zones (net clearance widened to the half-width).
 usage: supply5.py IN OUT --nc OUT_net_clearances.json"""
-import os, json, uuid, argparse, math
+import os, uuid, argparse, math
 import board as bd
 from shapely.geometry import box, Point, LineString
 from shapely.ops import unary_union, nearest_points
@@ -94,8 +94,8 @@ def trim_centres(B, log=print):
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(); ap.add_argument('inp'); ap.add_argument('out'); ap.add_argument('--nc'); a = ap.parse_args()
     B = bd.Board(a.inp)
-    # R6_SKIP_SUPPLY=1 skips the supply shapes, for comparing signal routing between placements
-    if not os.environ.get('R6_SKIP_SUPPLY'): run(B)
+    # R6_SKIP_SUPPLY=1 skips the supply shapes, for comparing signal routing between placements; with no fingers there is nothing for the bias nets to keep clear of
+    skip = os.environ.get('R6_SKIP_SUPPLY')
+    if not skip: run(B)
     B.save(a.out)
-    if a.nc:
-        nc = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'net_clearances.json'))); nc.update({'V+': HW - W / 2 + bd.CLEAR, 'V-': HW - W / 2 + bd.CLEAR}); json.dump(nc, open(a.nc, 'w'), indent=1)
+    if a.nc: bd.write_clearances(a.nc, None if skip else {'V+': HW - W / 2 + bd.CLEAR, 'V-': HW - W / 2 + bd.CLEAR})

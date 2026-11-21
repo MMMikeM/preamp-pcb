@@ -75,7 +75,7 @@ def router(nets, layers, extra=(), clearances=None, add_only=False):
            '--same-net-pad-clearance', '0.15', '--fab-tier', 'standard', '--escalation', 'off',
            # stated, not left to the router: without a .kicad_pro beside the board it falls back to 0.25 / 0.2 / 0.2 mm, looser than rule 7 at the edge
            '--clearance', str(bd.CLEAR), '--board-edge-clearance', str(bd.EDGE), '--hole-to-hole-clearance', str(bd.HOLE_GAP),
-           '--net-clearances', clearances or os.path.join(HERE, 'net_clearances.json'), '--keep-input-copper', '--direction-preference-cost', '0', *extra]
+           '--net-clearances', clearances or bd.NET_CLEARANCES, '--keep-input-copper', '--direction-preference-cost', '0', *extra]
     with timed('router ' + '+'.join(layers), kind='router', layers=list(layers), nets_given=len(nets)) as rec:
         release_held(); A = bd.Board(BOARD); print('  $', ' '.join(str(c) for c in cmd))
         if os.path.exists(out): os.remove(out)
@@ -237,8 +237,7 @@ def wide_then_standard(nets, step):
     """Pass 3: router vias allowed, with wider gaps so it cannot bring back the squeezes pass 1 was rejected for. A widened clearance also
     shuts a net out of its own pad when that pad sits inside it, so what stays open gets one try at the standard clearances; route_signals
     then holds those routes to the squeeze and high-impedance tests the wider gaps stood in for."""
-    nc = json.load(open(os.path.join(HERE, 'net_clearances.json'))); wide = os.path.join(WORK, f'{step}_pass3_clearances.json')
-    json.dump({k: (HZ_NEAR if bd.is_hz(k) else v) for k, v in nc.items()}, open(wide, 'w'))
+    wide = bd.write_clearances(os.path.join(WORK, f'{step}_pass3_clearances.json'), {k: HZ_NEAR for k in bd.net_clearances() if bd.is_hz(k)})
     shut_out = router(nets, ['F.Cu', 'In2.Cu'], TOP_AND_L3 + ['--clearance', '0.3'], clearances=wide)
     if shut_out:
         print('  still open with the widened clearances, retried with the standard ones:', shut_out); count('nets retried at standard clearances', len(shut_out))
