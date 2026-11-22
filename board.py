@@ -73,6 +73,7 @@ class Board:
             desc = next((p[2] for p in find(fp, 'property') if p[1] == 'Description'), '')
             # a part swapped by hand gets no via in its pads; the schematic marks it, so renumbering does not lose it
             self.fps[ref] = dict(ref=ref, val=val, x=fx, y=fy, r=fr, layer=first(fp, 'layer')[1], pads=[], hand='swap by hand' in desc.lower())
+            fz = first(fp, 'zone_connect')
             for p in find(fp, 'pad'):
                 pa = first(p, 'at'); dx, dy = rot(float(pa[1]), float(pa[2]), fr)
                 # the file stores a pad's angle as absolute (footprint rotation included), so a missing angle means 0
@@ -84,7 +85,8 @@ class Board:
                 if any(l == 'F&B.Cu' for l in lay): cu |= {'F.Cu', 'B.Cu'}
                 pad = dict(ref=ref, num=p[1], x=fx + dx, y=fy + dy, w=w, h=h, net=(n[-1] if n else ''), kind=p[2], shape=p[3],
                            drill=(float(d[-1]) if d and len(d) > 1 else 0.0), layers=cu,
-                           rr=(float(first(p, 'roundrect_rratio')[1]) if first(p, 'roundrect_rratio') else 0.0))
+                           rr=(float(first(p, 'roundrect_rratio')[1]) if first(p, 'roundrect_rratio') else 0.0),
+                           zone_none=(first(p, 'zone_connect') or fz or [0, '1'])[1] == '0')
                 if pad['kind'] == 'np_thru_hole': pad['net'] = ''
                 self.pads.append(pad); self.fps[ref]['pads'].append(pad)
         for s in find(B, 'segment'):

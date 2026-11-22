@@ -274,6 +274,14 @@ def top_again(nets, step):
         count(f'{step} flagged vias retried on top'); count(f'{step} flagged vias replaced on top', int(not why))
         print(f"  {n} {x['a']} -> {x['b']}: " + (f'{why[1]}, vias kept' if why else f"now on top, {len(off)} pieces off the top layer removed"))
     if os.path.exists(BOARD + '.via'): os.remove(BOARD + '.via')
+def drop_dangling(nets, step):
+    """A pad via whose inner-layer join was made another way, or that its zone does not reach, joins nothing and is removed"""
+    B = bd.Board(BOARD); gone = []
+    while True:                                                               # one at a time: of two vias joining the same pieces, each is spare only while the other stays
+        v = next((v for v in checks.dangling_vias(B, set(nets)) if not v['locked']), None)
+        if not v: break
+        B.remove([v['uuid']]); gone.append(f"{v['net']} ({v['x']:.2f}, {v['y']:.2f})")
+    if gone: B.save(BOARD); count(f'{step} vias joining nothing removed', len(gone)); print(f'  vias joining nothing removed: {gone}')
 def wide_then_standard(nets, step):
     """Pass 3: router vias allowed, with wider gaps so it cannot bring back the squeezes pass 1 was rejected for. A widened clearance also
     shuts a net out of its own pad when that pad sits inside it, so what stays open gets one try at the standard clearances; route_signals
@@ -346,16 +354,35 @@ def route_signals(nets, step='2e'):
     B = bd.Board(BOARD); left = [n for n in again if checks.top_incomplete(B, n)]         # pass 4: a pad that was blocked in pass 2 may be free now
     if left: pad_vias_then_l3(left, f'{step} pass 4')
     top_again(nets, step)
+    drop_dangling(nets, step)
     B = bd.Board(BOARD); still_open = [n for n in nets if checks.top_incomplete(B, n)]; long = {n: w for n in nets if n not in still_open for w in [wanders(B, n)] if w[0]}
     for n in still_open: print(f'  {n}: still open')
     for n, (_, L, t) in long.items(): print(f'  {n}: {L:.0f} mm for a {t:.0f} mm tree, over the limit for a net off the top layer')
     count(f'{step} nets left open', len(still_open)); count(f'{step} nets left too long', len(long)); return still_open, sorted(long)
 
+def link_unpoured_ground():
+    """A ground pad set to no zone connection (a corner with no room for spokes) is not joined by the pours, and nothing routes ground:
+    it gets a top-layer link to the nearest ground pad that can take one"""
+    B = bd.Board(BOARD)
+    for p in [p for p in B.pads if p['net'] in bd.GROUND and p['zone_none'] and 'F.Cu' in p['layers']]:
+        comps = tl.components(B, p['net']); mine = next(c for c in comps if any(checks.label(q) == checks.label(p) for q in c['pads']))
+        if len(mine['pads']) > 1 or mine['segs']: continue
+        found = None
+        for g, i in sorted((tl.gap(mine, c)[0], i) for i, c in enumerate(comps) if c is not mine)[:5]:
+            lim = max(TOP_RATIO * g, g + TOP_EXTRA)
+            for w in (0.4, 0.3, 0.2):
+                found = tl.top_path(B, p['net'], mine, comps[i], w, max_len=lim)
+                if found and found[0] <= lim: break
+                found = None
+            if found: break
+        if not found: print(f'  WARNING: {checks.label(p)} has no zone connection and no legal top-layer link to another ground pad'); count('unpoured ground pads left open'); continue
+        pts = found[1]; B.add([B.seg_text(*pts[k], *pts[k + 1], w, 'F.Cu', p['net']) for k in range(len(pts) - 1)]); B.save(BOARD)
+        count('unpoured ground pads linked'); print(f'  {checks.label(p)} has no zone connection: linked on top, {found[0]:.1f} mm, {w} mm wide')
 def run_step(s, src):
     links = [PY, os.path.join(HERE, 'neighbour_links.py'), BOARD, BOARD, '--json', os.path.join(WORK, f'{s}_links.json')]
     if s == 'setup':
         if not src: raise SystemExit('--from BOARD needed')
-        sh([PY, os.path.join(HERE, 'setup6.py'), src, BOARD])
+        sh([PY, os.path.join(HERE, 'setup6.py'), src, BOARD]); link_unpoured_ground()
         pro = os.path.splitext(src)[0] + '.kicad_pro'; cl = {}
         if not os.path.exists(pro): print('  no .kicad_pro beside the board, so step 2p has no net classes')
         else:
@@ -387,6 +414,8 @@ def run_step(s, src):
         # bias nets: L3 runs east-west, L5 north-south (the router alternates by position in --layers); BIAS_L3_COST trades L3 length against hop vias
         router(bias, ['In2.Cu', 'In4.Cu'], ['--layer-costs', os.environ.get('BIAS_L3_COST', '2.0'), '1.0', '--via-cost', '40', '--track-width', '0.4',
                                             '--direction-preference-cost', '1000'])
+        # a rail via the zone misses is a fault in the zone, not a spare: check --final reports it
+        drop_dangling([n for n in B.nets if bd.is_supply(n) and n not in bd.RAILS], '2d')
     elif s == '2e':
         B = bd.Board(BOARD); later = mirror_route.waits_for_copy(B); still_open, long = route_signals([n for n in open_signals(B) if n not in later])
         # every one of these nets has now been attempted, so one left open or wandering is this step's failure, not something for the final check to find

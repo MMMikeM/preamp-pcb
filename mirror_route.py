@@ -99,7 +99,11 @@ def run(B, src='1', dry=False):
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(); ap.add_argument('inp'); ap.add_argument('out'); ap.add_argument('--from', dest='src', default='1', choices=['1', '2'])
     ap.add_argument('--dry-run', action='store_true'); ap.add_argument('--json'); a = ap.parse_args(); B = bd.Board(a.inp)
-    if not plan(B, a.src)[0]: sys.exit('no net of this channel has a twin, mirrored or shifted: the placement does not match what this step copies')
+    if not plan(B, a.src)[0]:
+        print('nothing to copy: no net of this channel has a twin, mirrored or shifted, so step 2i routes the other channel')
+        if not a.dry_run: B.save(a.out)
+        if a.json: json.dump(dict(copied=[], skipped=[]), open(a.json, 'w'), indent=1)
+        sys.exit(0)
     todo, skipped = run(B, a.src, a.dry_run)
     print(len(todo), 'nets copied:', {m: sum(t['mode'] == m for t in todo) for m in ('mirror', 'copy')})
     for s in skipped:

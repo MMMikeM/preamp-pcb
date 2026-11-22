@@ -66,7 +66,8 @@ def test_drops(linked):
     gnd = [p for p in B.pads if p['net'] == 'GND' and drops.smd_top(p) and not B.fps[p['ref']]['hand'] and not p['ref'].startswith('TP')]
     assert all(drops.has_via(B, p) for p in gnd)
     assert all((v['size'] - v['drill']) / 2 >= 0.1 - 1e-9 for v in B.vias)
-    assert [u for u in checks.unconnected(B) if u['net'] == 'GND'] == []
+    cut = {checks.label(p) for p in B.pads if p['zone_none']}                          # setup links those on top; the drops cannot reach them
+    assert {x for u in checks.unconnected(B) if u['net'] == 'GND' for g in u['pads'] for x in g} <= cut
 def test_mirror_route_copies_connectivity(linked):
     B, _ = linked; planned = len(mirror_route.plan(B)[0]); todo, skipped = mirror_route.run(B)
     assert planned >= 20 and todo and checks.clearances(B) == []
@@ -316,6 +317,7 @@ def test_a_pair_joined_through_vias_with_a_free_top_path_is_routed_on_top_again(
     assert not [v for v in B.vias if v['net'] == good] and {s['layer'] for s in B.segs if s['net'] == good} == {'F.Cu'}
     assert len([v for v in B.vias if v['net'] == bad]) == 2 and not checks.top_incomplete(B, bad)
 REV06 = os.path.join(os.path.dirname(HERE), 'fixtures', 'landscape-rev06', 'humbucker-preamp.kicad_pcb')
+LAND509 = os.path.join(os.path.dirname(HERE), 'fixtures', 'landscape-509fb5a', 'humbucker-preamp.kicad_pcb')
 def test_hand_swapped_parts_are_read_from_the_footprint_description():
     import hand_access; B = bd.Board(REV06)                                             # rev 0.6 renumbered them: R109 and R117 are other parts now
     assert hand_access.hand_refs(B) == {'R106', 'R114', 'R206', 'R214'}
@@ -339,7 +341,7 @@ def test_a_signal_pad_via_goes_in_the_pad_nearest_the_rest_of_the_net(bare):
     assert inside(near) and not inside(far)
 @pytest.mark.skipif(not os.environ.get('ROUTER_DIR'), reason='needs ROUTER_DIR (KiCadRoutingTools checkout)')
 def test_the_split_plane_gives_each_rail_one_whole_zone_holding_all_its_vias(work):
-    B = bd.Board(REV06); B.text = setup6.convert(B.text); B._parse(); B.remove([x['uuid'] for x in B.segs + B.vias])
+    B = bd.Board(LAND509); B.text = setup6.convert(B.text); B._parse(); B.remove([x['uuid'] for x in B.segs + B.vias])   # on rev06 it left U3.4's via 0.39 mm outside the V+ zone
     drops.run(B, supply=True, log=lambda *_: None); B.save(stage_route.BOARD); stage_route.split_supply()
     B = bd.Board(stage_route.BOARD)
     assert sorted(z['net'] for z in B.zones if z['net'] in bd.RAILS) == ['V+', 'V-'] and checks.zone_integrity(B) == []
@@ -372,3 +374,27 @@ def test_only_the_nets_the_copy_will_fill_wait_for_it(bare):
     wait = mirror_route.waits_for_copy(bare); twins = {t['twin'] for t in mirror_route.plan(bare)[0]}
     own = [n for n in bare.nets if bd.is_signal(n) and ends(bare, n) and all(mirror_route.is_dst(p['ref'], '1') for p in ends(bare, n)) and n not in twins]
     assert wait == twins and own and not set(own) & wait                                 # the bridge's own nets are routed with the neck's, not left to 2i
+def test_a_ground_pad_with_no_zone_connection_is_linked_on_top(bare, work):
+    cut = [p for p in bare.pads if p['net'] in bd.GROUND and p['zone_none']]
+    loose = lambda B: {x for u in checks.unconnected(B, ['GND']) for g in u['pads'] for x in g}
+    assert cut and {checks.label(p) for p in cut} <= loose(bare)                          # the pours do not reach them, so the check must not count them joined
+    bare.save(stage_route.BOARD); stage_route.link_unpoured_ground(); B = bd.Board(stage_route.BOARD)
+    assert not {checks.label(p) for p in cut} & loose(B) and checks.clearances(B) == [] and {s['layer'] for s in B.segs} == {'F.Cu'}
+def test_a_via_joining_nothing_is_removed_but_one_joining_two_tracks_is_kept(bare, work):
+    n, m = close_pairs(bare)[:2]
+    straight(bare, n); a, b = ends(bare, n); bare.add([bare.via_text(a['x'], a['y'], 0.45, 0.2, n)])          # a pad via whose L3 join was never made
+    a, b = ends(bare, m); x, y = (a['x'] + b['x']) / 2, (a['y'] + b['y']) / 2; d = math.dist((a['x'], a['y']), (b['x'], b['y'])); ux, uy = (b['x'] - a['x']) / d, (b['y'] - a['y']) / d
+    track(bare, m, [(a['x'], a['y']), (x - 0.2 * ux, y - 0.2 * uy)]); track(bare, m, [(x + 0.2 * ux, y + 0.2 * uy), (b['x'], b['y'])])
+    bare.add([bare.via_text(x, y, 0.45, 0.2, m)])                                         # two top tracks that meet only through this via
+    assert {v['net'] for v in checks.dangling_vias(bare)} == {n} and {v['net'] for v in bare.vias if len(checks.via_layers(bare, v)) < 2} == {n, m}
+    bare.save(stage_route.BOARD); stage_route.drop_dangling([n, m], 'test'); B = bd.Board(stage_route.BOARD)
+    assert [v['net'] for v in B.vias] == [m] and not checks.top_incomplete(B, m)
+def test_the_copy_step_passes_when_no_net_has_a_twin(bare, tmp_path):
+    text = bare.text
+    for k, r in enumerate(r for r in bare.fps if mirror_route.is_dst(r, '1')):          # each part of the other channel moved by its own amount, as when laid out by hand
+        i = text.index(f'(property "Reference" "{r}"'); s = text.rindex('\n\t(footprint', 0, i) + 2; a = text.index('(at ', s) + 4; x = text[a:text.index(' ', a)]
+        text = text[:a] + f'{float(x) + 0.3 * (k + 1):.4f}' + text[a + len(x):]
+    src = tmp_path / 'in.kicad_pcb'; out = tmp_path / 'out.kicad_pcb'; src.write_text(text)
+    assert not mirror_route.plan(bd.Board(str(src)))[0]
+    r = subprocess.run([sys.executable, os.path.join(os.path.dirname(HERE), 'mirror_route.py'), str(src), str(out)], capture_output=True, text=True)
+    assert r.returncode == 0 and 'nothing to copy' in r.stdout and out.read_text() == text
