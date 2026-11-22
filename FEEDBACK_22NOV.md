@@ -40,3 +40,18 @@ The author has applied only the neck half for now and will mirror the bridge onc
    `/Neck/OB` (a P5 op-amp output) came out at 38 mm against a 37.8 mm limit (`L3_RATIO` 1.8 × its 21 mm tree), and 2e
    failed. With 1.9 everything else was identical and the board completed. Suggest a larger ratio for P5 (and P4), which
    are low-impedance, or a warning instead of a failure for those classes. Keep 1.8 for P2 and P3.
+
+## Answers (late evening)
+**1. Bias retry: yes, build it,** with these conditions:
+- Keep the result only if the front-end net gets shorter **and** has no more vias than before, the re-routed bias net
+  stays within its own length limit, and `zone_integrity` stays clean (a bias track may still never cut a supply zone on
+  L5). Compare on the weighted total, not raw mm: a P2 millimetre is worth more than a P6 one.
+- It must not change anything on the other fixtures when no front-end net is long (same result, same vias).
+- Test it on **`fixtures/landscape-83962f0`** as well as mirrorB. That's the author's current board (placement since
+  reworked by hand, neck tuned by a placement search, GND links in). mirrorB is now a historical case. On 83962f0 the
+  full run (with 2h skipped and `L3_RATIO` 1.9) gives neck 416 mm / 17 vias, bridge ~393-403 / 18-20; please report
+  both channels before and after.
+
+**2. Commit and push: yes.** "Drop dangling vias, link unpoured GND, 2h skip" is fine as one commit. Please say in the
+body what each check now does on 83962f0 (the GND link should be a no-op there: the author's board has the links).
+The P5 off-top limit (addendum point 2) is still open; a separate commit is fine.
