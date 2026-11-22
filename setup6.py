@@ -51,7 +51,9 @@ def convert(text):
     zones = {}
     for m in list(re.finditer(r'\n\t\(zone\n', text))[::-1]:                 # back to front so offsets stay valid
         s = m.start() + 1; e = block(text, s); z = text[s:e]
-        name = re.search(r'\(name "([^"]*)"\)', z).group(1)
+        name = (re.search(r'\(name "([^"]*)"\)', z) or [None, ''])[1]
+        if re.search(r'\(net "(%s)"\)' % '|'.join(map(re.escape, bd.RAILS)), z):   # a routed board's supply zones: step 2d lays them again
+            text = text[:s] + text[e + 1:]; continue
         z2 = z
         while True:                                                          # drop stale fills
             i = z2.find('\n\t\t(filled_polygon')
