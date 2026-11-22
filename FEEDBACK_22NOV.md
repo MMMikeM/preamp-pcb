@@ -30,3 +30,13 @@ placement. SB is P2 (front end), OB and CLD are P4/P5, yet on L3 SB is laid afte
 finishes at more than 1.5× its straight-line length, rip the lower-priority L3 copper in its bounding box, route it first
 and keep the result if the total is shorter. Test: this fixture, `/Bridge/SB` within 30 mm and `Net-(C205-Pad1)` with no vias.
 The author has applied only the neck half for now and will mirror the bridge once this routes.
+
+## Addendum (evening): two things that stop a run on a good board
+1. **2h fails instead of skipping.** The author's channels are now laid out by hand and are no longer an exact mirror or
+   shift of each other (kicad `cf1471a`). `mirror_route.py` then exits 1 with "no net of this channel has a twin,
+   mirrored or shifted", and 2h fails. Running 2i and 2f after it gives a complete board with nothing must-fix. When there
+   is nothing to copy, 2h should log that and pass.
+2. **The off-top length limit stops a run over 0.2 mm on a P5 net.** On the author's board before `cf1471a`,
+   `/Neck/OB` (a P5 op-amp output) came out at 38 mm against a 37.8 mm limit (`L3_RATIO` 1.8 × its 21 mm tree), and 2e
+   failed. With 1.9 everything else was identical and the board completed. Suggest a larger ratio for P5 (and P4), which
+   are low-impedance, or a warning instead of a failure for those classes. Keep 1.8 for P2 and P3.
