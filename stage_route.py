@@ -179,7 +179,7 @@ def route_hz(nets):
         print(f'  {n} was left open; routed first, then {mates}: ' + (f'kept, all joined' if not worse else f'not kept ({worse} open or too long), the first attempt stands'))
     if os.path.exists(BOARD + '.hz'): os.remove(BOARD + '.hz')
 for _switch in ('KICAD_RIP_PREEXISTING', 'KICAD_FINALIZE_RIP', 'KICAD_RECONCILE_RIP_ESCALATION'): os.environ.setdefault(_switch, '0')   # the router must never rip copper an earlier step placed; each of the three grants that on its own
-L3_RATIO = 1.8; L3_EXTRA = 12.0; PINCH = 0.25; HZ_NEAR = tl.HZ_KEEP; HZ_RUN = 3.0; OWN_PAD = 2.5     # a top route is rejected if it squeezes between two foreign pads, or runs more than HZ_RUN mm inside the soft keep-away of a high-impedance net
+L3_RATIO = 1.8; L3_RATIO_LOW_Z = 2.2; L3_EXTRA = 12.0; PINCH = 0.25; HZ_NEAR = tl.HZ_KEEP; HZ_RUN = 3.0; OWN_PAD = 2.5     # a top route is rejected if it squeezes between two foreign pads, or runs more than HZ_RUN mm inside the soft keep-away of a high-impedance net
 TOP_ONLY = ['--via-cost', '100000']; TOP_AND_L3 = ['--layer-costs', '1.0', '1.2', '--via-cost', '150']
 def joins_short(B, net):
     L, t = length_and_tree(B, net); return not checks.top_incomplete(B, net) and L <= max(TOP_RATIO * t, t + TOP_EXTRA)
@@ -241,10 +241,14 @@ def top_first(nets, label):
         if why: later.append(n); count(f'{label} left for later: {why[0]}'); print(f'  {n}: {why[1]}, left for later')
     drop_new(B, later, before)
     count(f'{label} nets kept on top', len(nets) - len(later))
-def wanders(B, net):
+def in_class(net, cl, *classes): return any(fnmatch.fnmatchcase(net, p) for c in classes for p in cl.get(c, []))
+def wanders(B, net, ratio=L3_RATIO):
     """(too long, length, shortest tree) of a net that was allowed off the top layer"""
     L, t = length_and_tree(B, net)
-    return L > max(L3_RATIO * t, t + L3_EXTRA), L, t
+    return L > max(ratio * t, t + L3_EXTRA), L, t
+def too_long_to_pass(B, net, cl):
+    """wanders, at the limit a finished net must meet. Stage 2 and the outputs are low-impedance, so length costs them little"""
+    return wanders(B, net, L3_RATIO_LOW_Z if in_class(net, cl, 'P4_Stage2', 'P5_AudioOut') else L3_RATIO)
 def joined_off_top(B, net, at, ends):
     """The net's vias at the points `at` and the inner-layer track that touches them, directly or through more of that track.
     None if that track also reaches another via or a through-hole pad other than `ends`: it then serves a third pad as well."""
@@ -355,7 +359,8 @@ def route_signals(nets, step='2e'):
     if left: pad_vias_then_l3(left, f'{step} pass 4')
     top_again(nets, step)
     drop_dangling(nets, step)
-    B = bd.Board(BOARD); still_open = [n for n in nets if checks.top_incomplete(B, n)]; long = {n: w for n in nets if n not in still_open for w in [wanders(B, n)] if w[0]}
+    cl = net_classes() if os.path.exists(os.path.join(WORK, 'net_classes.json')) else {}
+    B = bd.Board(BOARD); still_open = [n for n in nets if checks.top_incomplete(B, n)]; long = {n: w for n in nets if n not in still_open for w in [too_long_to_pass(B, n, cl)] if w[0]}
     for n in still_open: print(f'  {n}: still open')
     for n, (_, L, t) in long.items(): print(f'  {n}: {L:.0f} mm for a {t:.0f} mm tree, over the limit for a net off the top layer')
     count(f'{step} nets left open', len(still_open)); count(f'{step} nets left too long', len(long)); return still_open, sorted(long)
@@ -398,7 +403,7 @@ def run_step(s, src):
         # before 2b, so a neighbour link (a supply link above all) routes round these nets instead of through their way. The rest of the
         # front end goes last: the sources sit on a low-impedance resistor ladder and can take a via
         B = bd.Board(BOARD); cl = net_classes(); copies = mirror_route.waits_for_copy(B)
-        of = lambda c: [n for n in B.nets if n not in copies and checks.top_incomplete(B, n) and any(fnmatch.fnmatchcase(n, p) for p in cl.get(c, []))]
+        of = lambda c: [n for n in B.nets if n not in copies and checks.top_incomplete(B, n) and in_class(n, cl, c)]
         drain = lambda n: n.split('/')[-1] in ('DA', 'DB')
         for label, group in (('2p drains', [n for n in of('P2_FrontEnd') if drain(n)]), ('2p stage 2', of('P4_Stage2')),
                              ('2p front end', [n for n in of('P2_FrontEnd') if not drain(n)])):

@@ -389,6 +389,10 @@ def test_a_via_joining_nothing_is_removed_but_one_joining_two_tracks_is_kept(bar
     assert {v['net'] for v in checks.dangling_vias(bare)} == {n} and {v['net'] for v in bare.vias if len(checks.via_layers(bare, v)) < 2} == {n, m}
     bare.save(stage_route.BOARD); stage_route.drop_dangling([n, m], 'test'); B = bd.Board(stage_route.BOARD)
     assert [v['net'] for v in B.vias] == [m] and not checks.top_incomplete(B, m)
+def test_stage_2_and_the_outputs_may_run_longer_off_the_top_layer(bare):
+    n = next(n for n in bare.nets if bd.is_signal(n) and stage_route.length_and_tree(bare, n)[1] > 16)
+    t = stage_route.length_and_tree(bare, n)[1]; p = ends(bare, n)[0]; track(bare, n, [(p['x'], p['y']), (p['x'], p['y'] + 2 * t)], layer='In2.Cu')
+    assert stage_route.too_long_to_pass(bare, n, {})[0] and stage_route.too_long_to_pass(bare, n, {'P5_AudioOut': [n]})[0] is False
 def test_the_copy_step_passes_when_no_net_has_a_twin(bare, tmp_path):
     text = bare.text
     for k, r in enumerate(r for r in bare.fps if mirror_route.is_dst(r, '1')):          # each part of the other channel moved by its own amount, as when laid out by hand

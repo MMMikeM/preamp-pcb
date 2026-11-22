@@ -31,8 +31,10 @@ failed stays in `work/<step>.kicad_pcb` to look at. A board with arc tracks is r
 - `2a`, `2p`, `2b` and `2e` leave alone only the nets `2h` will copy, and route everything else on both channels. `2h` then
   copies those nets, skipping any whose copy would collide with copper that is staying, and `2i` routes whatever the copy
   did not cover. When no net has a twin (channels laid out by hand), `2h` copies nothing and passes.
-- `2e` and `2i` remove the vias that end up joining nothing (a pad via whose L3 join was made another way); `2d` does the
-  same for the battery and bias vias. A V+ or V- via its zone misses is left for `check --final` to report.
+- `2e` and `2i` fail on a net left open or one off the top layer longer than max(1.8 x its tree, tree + 12 mm); P4 and P5
+  nets, being low-impedance, get 2.2 x. Both remove the vias that end up joining nothing (a pad via whose L3 join was made
+  another way); `2d` does the same for the battery and bias vias. A V+ or V- via its zone misses is left for
+  `check --final` to report.
 - `2f` puts a via in each loose test point where one fits and has the router reach the rest by a track.
 
 ## The router (KiCadRoutingTools)
