@@ -1,3 +1,63 @@
+# route6: reviewer feedback (22 Nov 2026, fourth)
+
+Reply to `FEEDBACK_22NOV.md` (with its answers) and the late-evening addendum to `FEEDBACK_21NOV_EVE.md`.
+KiCadRoutingTools v0.24.1, `BIAS_L3_COST=1.0`, supply on, setup to 2i.
+
+## 83962f0: R110 gets no V+ (please look first)
+The split plane's V+ zone misses R110.1's via by 3.7 mm in our run, and by 2.2 mm in the zone already on your board.
+Nothing else joins R110.1 to V+, so the pad is cut off. The old connectivity check counted any via on a zone's layer as
+in the pour and passed it; the router's own checker has called V+ unconnected from 2d onward all along, but only as a
+note. With the check fixed (below), 2i now stops on 83962f0 with V+ open. Everything else on the board joins.
+
+## Bias retry: built
+When a front-end (P2) net has joined off the top layer at more than 1.5 x its tree, and a bias net has L3 track in the
+box round its pads (2 mm margin), the L3 tracks of both are lifted, the P2 net is joined on L3 again with no new vias,
+and the bias is routed again as in 2d. It is kept only if the P2 net is shorter with no more vias, every bias net that
+was joined still is and stays within its length limit, `zone_integrity` gets no worse, and the class-weighted total
+drops (a P2 mm weighs 3, any other 1, a via counts as 3 mm of its net). Otherwise the board goes back. It runs at the
+end of 2e and 2i.
+
+| Board | Before | After |
+|---|---|---|
+| 83962f0 | neck 416 mm / 17 vias, bridge 403 / 18 | **neck 408 / 17**, bridge 403 / 18 |
+| mirrorB | neck 418 / 14, bridge 456 / 21 | neck 418 / 14, **bridge 426 / 22** |
+| 509fb5a | | identical copper (nothing qualifies) |
+
+- 83962f0: `/Neck/SA` 32.5 -> 24.0 mm, same 3 vias; PB +6.3 mm and 2 vias. `/Bridge/SB` (28 mm for an 18 mm tree) was
+  tried and not kept: no lower weighted total. Before is your run's figure exactly (2h skipped, `L3_RATIO` 1.9).
+- mirrorB: `/Bridge/SB` 46.4 -> 34.4 mm, same 2 vias; `/Bridge/OA` (routed later, in 2i) 51.7 -> 35.0 mm and one more
+  via; PB +2.7 mm and 2 vias, REF +0.7 mm. `/Bridge/DB` was tried and not kept.
+
+How SB was found: alone on L3 with its own and OB's L3 tracks removed it stayed at 46.4 mm, so order among the signals
+was not it; the only L3 copper on its straight line was PB. Of the 34.4 mm left, 12 are on top from U2.5 to the pad via
+in R208.2; SB's tree is 28.4 mm, so 30 mm would also need that via nearer R207. `BIAS_L3_COST=2.0` does not help.
+
+## `Net-(C205-Pad1)`: a gate net in its way, not L3
+Routed alone on top, the 330k node joins in 7.9 mm on the setup board but needs 20 mm (over the limit) on the 2a board,
+and more after 2p. The only 2a copper on its straight line is `/Bridge/GB`: 16.0 mm for a 16.4 mm tree, while
+`/Neck/GB` goes round at 20.8 mm and leaves C105's way open. So it is P1 against P2: a bridge GB routed the neck's way
+(about 5 mm longer) would let the node join on top with no vias. That trade is the author's to make.
+
+## The rest: done
+- **2h with nothing to copy** logs "nothing to copy" and passes.
+- **P4/P5 off-top limit:** 2.2 x the tree for P4_Stage2 and P5_AudioOut, 1.8 for the rest, at the pass/fail test only;
+  the pass-2 "wandered, redo in pass 3" threshold stays 1.8, so routing is unchanged. 83962f0 passes 2e at these limits.
+- **Vias that join nothing** are removed at the end of 2e and 2i (signals) and 2d (battery and bias), and
+  `check --final` fails on any left, a V+ or V- via its zone misses included. "Joins nothing": copper of its net on
+  fewer than two layers, and the net's pads stay joined without it. It was a pass-2 pad via whose L3 join was later
+  made another way: on `509fb5a` it removes your `/Neck/CLD` via, on mirrorB four. None on 83962f0.
+- **J105/J205:** `board.py` reads zone connection "none"; setup links such a ground pad on top to the nearest ground
+  pad. On 83962f0 its links are exactly yours (setup rips tracks, then lays the same two).
+- **The connectivity check counted any copper on a zone's layer as in the pour.** It now needs to touch the zone
+  outline. That is what finds R110 above. On rev06 it also shows U3.4's via 0.39 mm outside the V+ zone when 2b's links
+  are left out; the split-plane test now runs on `509fb5a`.
+- **Setup takes a board that already has the V+ and V- zones** (83962f0 does, unnamed): it drops them and 2d lays them
+  again. Before, setup crashed on the unnamed zones.
+
+Not done: refusing a 2e pad via that splits a supply zone. It has not come back, and `zone_integrity` still catches it.
+
+---
+
 # route6: reviewer feedback (22 Nov 2026, third)
 
 Follows `a81a437`; the earlier parts of this file are unchanged below.

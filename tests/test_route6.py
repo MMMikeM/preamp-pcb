@@ -1,5 +1,5 @@
 """Run from the route6 folder:  python -m pytest -q tests      (about 4 minutes; needs shapely and numpy, not the router)"""
-import os, sys, math, re, copy, itertools, subprocess, pytest
+import os, sys, math, re, json, copy, itertools, subprocess, pytest
 from shapely.geometry import Point, box
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, os.path.dirname(HERE))
 import board as bd, toplink as tl, via_justify, neighbour_links, drops, checks, setup6, mirror_route, stage_route, krt_checks
@@ -402,3 +402,31 @@ def test_the_copy_step_passes_when_no_net_has_a_twin(bare, tmp_path):
     assert not mirror_route.plan(bd.Board(str(src)))[0]
     r = subprocess.run([sys.executable, os.path.join(os.path.dirname(HERE), 'mirror_route.py'), str(src), str(out)], capture_output=True, text=True)
     assert r.returncode == 0 and 'nothing to copy' in r.stdout and out.read_text() == text
+def _front_end_round_bias(bare, work, monkeypatch, long=True, bias_back=6.0):
+    """A front-end net joined on L3 between its two pad vias, with a bias track across its way on L3. The stand-in router joins the
+    net straight on L3 and lays the bias again `bias_back` mm long, away from the net."""
+    monkeypatch.setenv('ROUTER_DIR', str(work)); n = close_pairs(bare)[0]; a, b = ends(bare, n)
+    (work / 'net_classes.json').write_text(json.dumps({'P2_FrontEnd': [n]}))
+    bare.add([bare.via_text(p['x'], p['y'], 0.45, 0.2, n) for p in (a, b)])
+    track(bare, n, [(a['x'], a['y']), (a['x'], a['y'] + 12), (b['x'], b['y'] + 12), (b['x'], b['y'])] if long else [(a['x'], a['y']), (b['x'], b['y'])], layer='In2.Cu')
+    mx, my = (a['x'] + b['x']) / 2, (a['y'] + b['y']) / 2; track(bare, 'PB', [(mx, my - 3), (mx, my + 3)], w=0.4, layer='In2.Cu')
+    bare.save(stage_route.BOARD); calls = []
+    def run(cmd, cwd):
+        C = bd.Board(stage_route.BOARD); nets = cmd[cmd.index('--nets') + 1:cmd.index('--layers')]; calls.append(nets)
+        if n in nets: track(C, n, [(a['x'], a['y']), (b['x'], b['y'])], layer='In2.Cu')
+        if 'PB' in nets: track(C, 'PB', [(mx + 20, my), (mx + 20, my + bias_back)], w=0.4, layer='In2.Cu')
+        C.save(stage_route.BOARD + '.tmp'); return dict(returncode=0)
+    monkeypatch.setattr(stage_route, 'run_router', run); return n, calls
+def l3(B, n): return sum(math.dist((s['x1'], s['y1']), (s['x2'], s['y2'])) for s in B.segs if s['net'] == n and s['layer'] == 'In2.Cu')
+def test_a_long_front_end_net_is_routed_again_with_the_bias_moved_out_of_its_way(bare, work, monkeypatch):
+    n, calls = _front_end_round_bias(bare, work, monkeypatch); before = l3(bd.Board(stage_route.BOARD), n)
+    stage_route.bias_out_of_the_way([n], 'test'); B = bd.Board(stage_route.BOARD)
+    assert calls == [[n], ['PB']] and l3(B, n) < before - 20 and l3(B, 'PB') == pytest.approx(6.0) and not checks.top_incomplete(B, n)
+def test_a_reroute_that_costs_the_bias_more_than_the_front_end_gains_is_not_kept(bare, work, monkeypatch):
+    n, calls = _front_end_round_bias(bare, work, monkeypatch, bias_back=100.0); was = open(stage_route.BOARD).read()
+    stage_route.bias_out_of_the_way([n], 'test')
+    assert calls == [[n], ['PB']] and open(stage_route.BOARD).read() == was                      # within PB's own limit, but a P2 mm weighs 3 bias mm: 24 mm saved does not pay for 94
+def test_a_front_end_net_within_its_length_is_left_alone(bare, work, monkeypatch):
+    n, calls = _front_end_round_bias(bare, work, monkeypatch, long=False); was = open(stage_route.BOARD).read()
+    stage_route.bias_out_of_the_way([n], 'test')
+    assert calls == [] and open(stage_route.BOARD).read() == was

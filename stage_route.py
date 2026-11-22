@@ -20,7 +20,7 @@ The router is KiCadRoutingTools (not included): set ROUTER_DIR to its checkout. 
 import sys, os, subprocess, shutil, argparse, json, math, time, re, contextlib, fnmatch
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import board as bd, toplink as tl, checks, krt_checks, mirror_route, drops, via_justify, hand_access
-from shapely.geometry import LineString, Point
+from shapely.geometry import LineString, Point, box
 from shapely.strtree import STRtree
 from shapely.ops import unary_union
 WORK = os.environ.get('R6_WORK') or os.path.join(HERE, 'work'); BOARD = os.path.join(WORK, 'board.kicad_pcb')
@@ -358,6 +358,7 @@ def route_signals(nets, step='2e'):
     B = bd.Board(BOARD); left = [n for n in again if checks.top_incomplete(B, n)]         # pass 4: a pad that was blocked in pass 2 may be free now
     if left: pad_vias_then_l3(left, f'{step} pass 4')
     top_again(nets, step)
+    bias_out_of_the_way(nets, step)
     drop_dangling(nets, step)
     cl = net_classes() if os.path.exists(os.path.join(WORK, 'net_classes.json')) else {}
     B = bd.Board(BOARD); still_open = [n for n in nets if checks.top_incomplete(B, n)]; long = {n: w for n in nets if n not in still_open for w in [too_long_to_pass(B, n, cl)] if w[0]}
@@ -365,6 +366,46 @@ def route_signals(nets, step='2e'):
     for n, (_, L, t) in long.items(): print(f'  {n}: {L:.0f} mm for a {t:.0f} mm tree, over the limit for a net off the top layer')
     count(f'{step} nets left open', len(still_open)); count(f'{step} nets left too long', len(long)); return still_open, sorted(long)
 
+def route_bias(nets):
+    # L3 runs east-west, L5 north-south (the router alternates by position in --layers); BIAS_L3_COST trades L3 length against hop vias
+    return router(nets, ['In2.Cu', 'In4.Cu'], ['--layer-costs', os.environ.get('BIAS_L3_COST', '2.0'), '1.0', '--via-cost', '40', '--track-width', '0.4',
+                                               '--direction-preference-cost', '1000'])
+FRONT_LONG = 1.5; BOX = 2.0; VIA_MM = 3.0; WEIGHT = {'P2_FrontEnd': 3.0}     # per mm of track; a class not listed weighs 1, and a via counts as VIA_MM of its net
+def weight(net, cl): return max([w for c, w in WEIGHT.items() if in_class(net, cl, c)] or [1.0])
+def cost(B, nets, cl): return sum(weight(n, cl) * (length_and_tree(B, n)[0] + VIA_MM * sum(v['net'] == n for v in B.vias)) for n in nets)
+def bias_out_of_the_way(nets, step):
+    """2d lays the bias on L3 before any signal, so a front-end net that joined off the top layer may have gone round it. Such a net
+    over FRONT_LONG x its tree, with bias track on L3 in its box, is joined on L3 again with those bias nets' L3 tracks lifted, and the
+    bias is routed again round it. Kept only if the front-end net is shorter with no more vias, every bias net joins within its length
+    limit, no supply zone is cut, and the class-weighted total is lower; otherwise the board goes back."""
+    cl = net_classes() if os.path.exists(os.path.join(WORK, 'net_classes.json')) else {}
+    for n in [n for n in nets if in_class(n, cl, 'P2_FrontEnd')]:
+        B = bd.Board(BOARD); L, t = length_and_tree(B, n)
+        if checks.top_incomplete(B, n) or L <= FRONT_LONG * t or not any(s['net'] == n and s['layer'] == 'In2.Cu' for s in B.segs): continue
+        xs, ys = zip(*[(p['x'], p['y']) for p in B.pads if p['net'] == n and not checks.is_tp(p)])
+        area = box(min(xs) - BOX, min(ys) - BOX, max(xs) + BOX, max(ys) + BOX)
+        bias = sorted({s['net'] for s in B.segs if s['net'] in bd.BIAS and s['layer'] == 'In2.Cu' and not s['locked'] and B.seg_geom(s).intersects(area)})
+        if not bias: continue
+        vias = lambda B, m: sum(v['net'] == m for v in B.vias)
+        was = dict(L=L, vias=vias(B, n), cost=cost(B, [n] + bias, cl), zones=len(checks.zone_integrity(B)), bias={b: wanders(B, b)[1] for b in bias},
+                   open={b for b in bias if checks.top_incomplete(B, b)})
+        shutil.copy(BOARD, BOARD + '.bias')
+        B.remove([s['uuid'] for s in B.segs if s['layer'] == 'In2.Cu' and s['net'] in [n] + bias]); B.save(BOARD)
+        try:
+            router([n], ['In2.Cu'], TOP_ONLY, add_only=True); route_bias(bias); drop_dangling(bias, step)
+            B = bd.Board(BOARD); now = length_and_tree(B, n)[0]
+            why = next((w for bad, w in (
+                (checks.top_incomplete(B, n), 'not joined'), (now >= was['L'] or vias(B, n) > was['vias'], f'{now:.0f} mm, {vias(B, n)} vias'),
+                (any(checks.top_incomplete(B, b) for b in bias if b not in was['open']), 'a bias net left open'),
+                (any(wanders(B, b)[0] and wanders(B, b)[1] > was['bias'][b] for b in bias), 'a bias net over its length limit'),
+                (len(checks.zone_integrity(B)) > was['zones'], 'a supply zone cut'),
+                (cost(B, [n] + bias, cl) >= was['cost'], 'no lower weighted total')) if bad), None)
+        except StepFailed as e: why = f'the retry failed ({e})'
+        if why: shutil.copy(BOARD + '.bias', BOARD)
+        count(f'{step} front-end nets routed again round the bias'); count(f'{step} front-end reroutes round the bias kept', int(not why))
+        print(f"  {n} ({was['L']:.0f} mm for a {t:.0f} mm tree) routed on L3 before {bias}: " + (f'not kept ({why})' if why else
+              f"kept, {now:.0f} mm and {vias(B, n)} vias; weighted total {was['cost']:.0f} -> {cost(B, [n] + bias, cl):.0f}"))
+    if os.path.exists(BOARD + '.bias'): os.remove(BOARD + '.bias')
 def link_unpoured_ground():
     """A ground pad set to no zone connection (a corner with no room for spokes) is not joined by the pours, and nothing routes ground:
     it gets a top-layer link to the nearest ground pad that can take one"""
@@ -416,9 +457,7 @@ def run_step(s, src):
         if not os.environ.get('R6_SKIP_SUPPLY'): split_supply()                  # R6_SKIP_SUPPLY=1: no zones, for comparing signal routing between placements
         B = bd.Board(BOARD); bat = [n for n in B.nets if bd.is_battery(n)]; bias = [n for n in B.nets if n in bd.BIAS]
         router(bat, ['In4.Cu'], ['--via-cost', '100000', '--track-width', '0.5'])
-        # bias nets: L3 runs east-west, L5 north-south (the router alternates by position in --layers); BIAS_L3_COST trades L3 length against hop vias
-        router(bias, ['In2.Cu', 'In4.Cu'], ['--layer-costs', os.environ.get('BIAS_L3_COST', '2.0'), '1.0', '--via-cost', '40', '--track-width', '0.4',
-                                            '--direction-preference-cost', '1000'])
+        route_bias(bias)
         # a rail via the zone misses is a fault in the zone, not a spare: check --final reports it
         drop_dangling([n for n in B.nets if bd.is_supply(n) and n not in bd.RAILS], '2d')
     elif s == '2e':

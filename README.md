@@ -34,7 +34,9 @@ failed stays in `work/<step>.kicad_pcb` to look at. A board with arc tracks is r
 - `2e` and `2i` fail on a net left open or one off the top layer longer than max(1.8 x its tree, tree + 12 mm); P4 and P5
   nets, being low-impedance, get 2.2 x. Both remove the vias that end up joining nothing (a pad via whose L3 join was made
   another way); `2d` does the same for the battery and bias vias. A V+ or V- via its zone misses is left for
-  `check --final` to report.
+  `check --final` to report. Before that, a front-end net joined off the top layer at over 1.5 x its tree, with bias
+  track on L3 in its way, is joined again with that bias lifted and the bias routed again round it; kept only if the
+  class-weighted total drops and nothing else gets worse.
 - `2f` puts a via in each loose test point where one fits and has the router reach the rest by a track.
 
 ## The router (KiCadRoutingTools)
