@@ -20,7 +20,7 @@ The router is KiCadRoutingTools (not included): set ROUTER_DIR to its checkout. 
 import sys, os, subprocess, shutil, argparse, json, math, time, re, contextlib, fnmatch
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import board as bd, toplink as tl, checks, krt_checks, mirror_route, drops, via_justify, hand_access
-from shapely.geometry import LineString, Point, box
+from shapely.geometry import LineString, Point, Polygon, box
 from shapely.strtree import STRtree
 from shapely.ops import unary_union
 WORK = os.environ.get('R6_WORK') or os.path.join(HERE, 'work'); BOARD = os.path.join(WORK, 'board.kicad_pcb')
@@ -82,6 +82,25 @@ def split_supply(layer='In4.Cu'):
     made = {n for n in bd.RAILS if any(f'(net "{n}")' in z for z in zones)}
     if made != bd.RAILS: raise StepFailed(f'the split plane made no zone for {sorted(bd.RAILS - made)}')
     A.add(zones); A.save(BOARD); count('supply zones', len(zones))
+HOP_WIDTH = 0.4
+def hop_to_zone(layer='In2.Cu'):
+    """Rule 6's L3 hop. A rail pad whose via the zone does not reach (its L5 stub would have to cross the other rail's zone) is joined by
+    one track on L3, with no new via, from that via to the nearest via of its own net that the zone does reach."""
+    B = bd.Board(BOARD); hops = []
+    for net in sorted(bd.RAILS):
+        zones = [Polygon(z['pts']) for z in B.zones if z['net'] == net and len(z['pts']) > 2]
+        landed = [v for v in B.vias if v['net'] == net and any(z.intersects(B.via_geom(v)) for z in zones)]
+        for g in checks.pad_groups(B, net):
+            mine = [v for v in B.vias if v['net'] == net and any(B.pad_geom(p).intersects(B.via_geom(v)) for p in g)]
+            if not mine or any(v in landed for v in mine): continue
+            comps = tl.components(B, net, layer); src = next(c for c in comps if any(v in mine for v in c['vias']))
+            homes = sorted((tl.gap(src, c)[0], i) for i, c in enumerate(comps) if any(v in landed for v in c['vias']))
+            found = next((r for _, i in homes[:5] for r in [tl.top_path(B, net, src, comps[i], HOP_WIDTH, layer=layer)] if r), None)
+            label = '+'.join(checks.label(p) for p in g)
+            if not found: print(f'  {net} {label}: no L3 hop to its zone'); continue
+            pts = found[1]; B.add([B.seg_text(*pts[k], *pts[k + 1], HOP_WIDTH, layer, net) for k in range(len(pts) - 1)]); B.save(BOARD)
+            hops.append(label); count('rail pads joined by an L3 hop'); print(f'  {net} {label}: the zone misses its via; joined by an L3 hop of {found[0]:.1f} mm')
+    return hops
 def router(nets, layers, extra=(), clearances=None, add_only=False):
     """Returns the given nets the router left open"""
     if not nets: print('  nothing to route on', *layers); return []
@@ -454,7 +473,10 @@ def run_step(s, src):
     elif s == '2c': sh([PY, os.path.join(HERE, 'drops.py'), BOARD, BOARD, '--ground', '--json', os.path.join(WORK, '2c_drops.json')])
     elif s == '2d':
         sh([PY, os.path.join(HERE, 'drops.py'), BOARD, BOARD, '--supply', '--json', os.path.join(WORK, '2d_drops.json')])
-        if not os.environ.get('R6_SKIP_SUPPLY'): split_supply()                  # R6_SKIP_SUPPLY=1: no zones, for comparing signal routing between placements
+        if not os.environ.get('R6_SKIP_SUPPLY'):                                 # R6_SKIP_SUPPLY=1: no zones, for comparing signal routing between placements
+            split_supply(); hop_to_zone()
+            cut = checks.unconnected(bd.Board(BOARD), sorted(bd.RAILS))
+            if cut: raise StepFailed(f"2d left {', '.join(u['net'] + ' open at ' + str(u['pads']) for u in cut)}")
         B = bd.Board(BOARD); bat = [n for n in B.nets if bd.is_battery(n)]; bias = [n for n in B.nets if n in bd.BIAS]
         router(bat, ['In4.Cu'], ['--via-cost', '100000', '--track-width', '0.5'])
         route_bias(bias)

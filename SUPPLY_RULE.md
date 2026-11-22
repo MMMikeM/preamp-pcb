@@ -15,14 +15,17 @@ built; the router's split plane replaced them. Their text is in git (`ecb0475`).
    corridors on the layer, and the regions are laid out so the two rails never cross.
 3. Only its V+ and V- zones are kept, at the fill priorities it assigns. Its own GND pieces are dropped, so the GND pour
    stays as `setup` made it, and `guard` confirms it placed no tracks or vias.
-4. The battery nets, then REF, PB and /VR, are routed by the router at the standard clearances.
+4. A rail pad whose via the zone does not reach (its L5 stub would cross the other rail's zone) gets rule 6's L3 hop: one
+   0.4 mm track on L3, no new via, from its pad via to the nearest via of its own net that the zone does reach. 2d fails
+   if V+ or V- is still open after that.
+5. The battery nets, then REF, PB and /VR, are routed by the router at the standard clearances.
 
 No board coordinates, no part names. A placement change moves the zones with it.
 
 ## What must hold after 2d
 - `zone_integrity` clean: each rail's zone is one piece that holds all of its vias, with no foreign track cutting it.
 - No V+, V- or bias net open.
-- No supply via outside its own rail's zone.
+- No supply via outside its own rail's zone, except a pad via joined to the zone by its L3 hop.
 
 ## Acceptance for a change to this step
 - On the current fixture, supply on against `R6_SKIP_SUPPLY=1` from the same commit: per channel, signal track within

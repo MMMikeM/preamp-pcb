@@ -26,7 +26,8 @@ failed stays in `work/<step>.kicad_pcb` to look at. A board with arc tracks is r
   vias, then lays one V+ and one V- zone on L5 from the router's split plane (`route_planes.py`, the "spine split"): GND
   stays the layer's background, and each rail's zone is grown round its own pads and vias and joined by corridors laid so
   the two never cross. Nothing is placed by coordinates. The battery and bias nets are routed after the zones, and
-  `zone_integrity` fails the step if one cuts a zone. `R6_SKIP_SUPPLY=1` leaves the zones out, for comparing signal
+  `zone_integrity` fails the step if one cuts a zone. A rail pad the zone misses gets an L3 hop to its own zone, and 2d
+  fails if V+ or V- is still open. `R6_SKIP_SUPPLY=1` leaves the zones out, for comparing signal
   routing between placements. `via_justify.py` judges V+, V- and the bias nets by 2b's limits.
 - `2a`, `2p`, `2b` and `2e` leave alone only the nets `2h` will copy, and route everything else on both channels. `2h` then
   copies those nets, skipping any whose copy would collide with copper that is staying, and `2i` routes whatever the copy

@@ -430,3 +430,14 @@ def test_a_front_end_net_within_its_length_is_left_alone(bare, work, monkeypatch
     n, calls = _front_end_round_bias(bare, work, monkeypatch, long=False); was = open(stage_route.BOARD).read()
     stage_route.bias_out_of_the_way([n], 'test')
     assert calls == [] and open(stage_route.BOARD).read() == was
+def test_a_rail_pad_beyond_the_other_rails_zone_joins_its_own_through_one_l3_hop(bare, work):
+    P = drops.Placer(bare); ok = [p for p in bare.pads if p['net'] == 'V+' and drops.smd_top(p) and not bare.fps[p['ref']]['hand'] and P.spot(p)]
+    a, c = next((a, c) for a, c in itertools.combinations(ok, 2) if 5 < math.dist((a['x'], a['y']), (c['x'], c['y'])) < 12)
+    va, vc = P.spot(a), P.spot(c); bare.add([bare.via_text(*va, 'V+'), bare.via_text(*vc, 'V+')])
+    mx, my = (va[0] + vc[0]) / 2, (va[1] + vc[1]) / 2
+    bare.add([zone_text('V+', Point(vc[0], vc[1]).buffer(1.5)), zone_text('V-', Point(mx, my).buffer(1.2))])   # its zone round the far via, the other rail's between
+    joined = lambda B: any({checks.label(a), checks.label(c)} <= {checks.label(p) for p in g} for g in checks.pad_groups(B, 'V+'))
+    assert not joined(bare)
+    bare.save(stage_route.BOARD); assert stage_route.hop_to_zone() == [checks.label(a)]; B = bd.Board(stage_route.BOARD)
+    hop = [s for s in B.segs if s['net'] == 'V+']
+    assert joined(B) and len(B.vias) == 2 and hop and {s['layer'] for s in hop} == {'In2.Cu'} and checks.clearances(B) == []

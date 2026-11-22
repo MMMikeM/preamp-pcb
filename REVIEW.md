@@ -1,3 +1,36 @@
+# route6: reviewer feedback (22 Nov 2026, fifth)
+
+Reply to `FEEDBACK_22NOV_LATE.md`. KiCadRoutingTools v0.24.1, `BIAS_L3_COST=1.0`, supply on.
+
+## Rule 6's L3 hop: in 2d
+Done in 2d, right after the split plane and before the battery and bias, so every later step routes round it. For each
+V+ or V- pad whose via its zone does not reach, `hop_to_zone` lays one 0.4 mm track on L3 from that via to the nearest
+via of its own net that the zone does reach, with no new via: the far end lands on a via already in the zone, so the
+hop is the pad via, the track and that via. Our own path search (`toplink`), not the router: one track, deterministic,
+and it keeps the high-impedance clearance. 2d then fails if V+ or V- is still open, which enforces "no V+ or V- open after
+2d".
+
+On 83962f0: R110.1 is joined in 8.5 mm (6.78, 27.58 board-relative) -> (11.78, 27.58) -> (14.27, 25.06), landing on the
+via of the V+ column. The first leg is horizontal, at right angles under the V- column (4.2 mm under the V- zone), then
+45 degrees for 1.1 mm more under it, then a 0.08 mm snap onto the via centre.
+
+| 83962f0, from 2d | Neck | Bridge |
+|---|---|---|
+| Without the hop (`6f474ff`) | 408 mm, 17 vias; 2i stops, V+ open | 403 mm, 18 vias |
+| With the hop | 408 mm, 17 vias; every net joined | 403 mm, 18 vias |
+
+`/Neck/SA` comes out 24.7 mm instead of 24.0. `509fb5a` gives identical copper (no pad is cut off there).
+
+- **`check --final` still fails on 83962f0, on unjustified vias**, as it did on your run and every run here before the
+  hop: `/BAT-` J1.3-Q302.2 (by design), `/Bridge/OB` C207.2-via and `/Bridge/SB` track-track. `/BAT-` alone keeps it from
+  ever passing on this placement; say if it should be excused rather than flagged.
+- Not enforced: 0.4 mm from P2 copper on L3. At 2d there is none on L3, and later P2 routes keep the standard 0.2 mm from
+  the hop; making them keep 0.4 needs a per-net-pair rule the router does not take.
+- Test: a V+ pad beyond a V- zone, with its own zone round a far via, joins through one L3 hop and two vias, with no new
+  copper on L5 and no clearance errors.
+
+---
+
 # route6: reviewer feedback (22 Nov 2026, fourth)
 
 Reply to `FEEDBACK_22NOV.md` (with its answers) and the late-evening addendum to `FEEDBACK_21NOV_EVE.md`.
