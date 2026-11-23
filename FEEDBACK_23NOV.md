@@ -43,3 +43,17 @@ via). Please treat a via plus the tracks hanging off it as one piece: if removin
 to it leaves the net joined the same way, remove both, and repeat back along the stub. Run it after the top retry (it
 made this one). `check --final` should fail on a via whose copper is on one layer only, whatever touches it there, which
 is KiCad's own test. Test: a net with a pad, a track to a via, and nothing else on that via loses both.
+
+## New fixture: `fixtures/landscape-7bccb83` (the author's current board, unrouted)
+Accepted `ab122fb`: KiCad DRC 0 unconnected, no routing items; it is on the author's board (`32dd563`).
+
+Since then the schematic gained cold-load drive-swap jumpers. Per channel, two 3-pin through-hole headers:
+- **JP101** picks OBN or CLD for C104's drive end (new net DRVA);
+- **JP102** picks CLD or OBN for C105's (new net DRVB).
+- DRVA/DRVB are P5_AudioOut. The fixture's `.kicad_pro` has the patterns.
+
+Placement changes:
+- the cold-load row (R103/R104) moved to the bottom, with C104/C105 in line;
+- the bridge corner is mirrored from the neck.
+
+Full run at `ab122fb`: neck 453 mm / 14 vias, bridge 444 / 17, `check --final` passes, KiCad DRC 0 errors / 0 unconnected. Most of the extra length is OBN, which now reaches both jumpers. Nothing to fix; this is the board to test against from now on.
