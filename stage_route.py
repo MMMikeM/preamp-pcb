@@ -17,7 +17,7 @@ its class's step. 2i routes what the copy did not cover.
 With ROUTER_DIR set, every step also gets a second opinion from the router's own DRC and connectivity check (krt_checks.py).
 2g (tidy) is manual review for now. WORK defaults to ./work/board.kicad_pcb; every step keeps work/<step>.kicad_pcb as well.
 The router is KiCadRoutingTools (not included): set ROUTER_DIR to its checkout. Steps 2b, 2c, 2h, check and setup do not need it."""
-import sys, os, subprocess, shutil, argparse, json, math, time, re, contextlib, fnmatch
+import sys, os, subprocess, shutil, argparse, json, math, time, re, contextlib, fnmatch, heapq, itertools
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import board as bd, toplink as tl, checks, krt_checks, mirror_route, drops, via_justify, hand_access
 from shapely.geometry import LineString, Point, Polygon, box
@@ -163,16 +163,20 @@ def finish(step, commit, final=False, failed=None):
     shutil.copy(BOARD, saved[0])
     with timed('load board', kind='check'): B = bd.Board(BOARD)
     per = {}
-    with timed('own checks', kind='check') as rec: R = checks.report(B, justify=final or step not in ('setup', '2a'), timing=per); rec['per_check_s'] = per
+    cl = json.load(open(os.path.join(WORK, 'net_classes.json'))) if os.path.exists(os.path.join(WORK, 'net_classes.json')) else None
+    with timed('own checks', kind='check') as rec: R = checks.report(B, justify=final or step not in ('setup', '2a'), timing=per, classes=cl); rec['per_check_s'] = per
     if krt_checks.configured():
         with timed("router's checker (second opinion)", kind='check'): R.update(krt_checks.report(BOARD))
-        ours = {u['net'] for u in R['unconnected']}
-        R['krt_unconnected_extra'] = [n for n in R.pop('krt_unconnected') if n not in ours]
-        print(f"  second opinion: {len(R['krt_drc'])} DRC items | nets only it calls unconnected: {R['krt_unconnected_extra'] or 'none'}")
+        # without KiCad's own refill the router estimates a pour's fill, and that estimate misses vias on a zone's edge that KiCad's fill
+        # reaches; a zoned net whose every pad reaches its zone through copper here is left to KiCad's DRC
+        ours = {u['net'] for u in R['unconnected']}; zoned = {z['net'] for z in B.zones}; theirs = [n for n in R.pop('krt_unconnected') if n not in ours]
+        R['krt_unconnected_extra'] = [n for n in theirs if n not in zoned]; R['krt_zone_fill_only'] = [n for n in theirs if n in zoned]
+        print(f"  second opinion: {len(R['krt_drc'])} DRC items | nets only it calls unconnected: {R['krt_unconnected_extra'] or 'none'}"
+              + (f" (and {R['krt_zone_fill_only']}, by its estimate of the pour only)" if R['krt_zone_fill_only'] else ''))
     else: print('  second opinion skipped: ROUTER_DIR is not set')
     json.dump(R, open(saved[1], 'w'), indent=1)
     bad = checks.must_fix(R, final)
-    print(f'[{step}] tracks {R["stats"]["tracks"]} vias {R["stats"]["vias"]} unconnected nets {len(R["unconnected"])} unjustified {len(R.get("unjustified_vias", []))} | must-fix: {bad or ("step failed: " + failed if failed else "none")}')
+    print(f'[{step}] tracks {R["stats"]["tracks"]} vias {R["stats"]["vias"]} unconnected nets {len(R["unconnected"])} unjustified {len(R.get("unjustified_vias", []))} (+{len(R.get("unjustified_warnings", []))} warnings) | must-fix: {bad or ("step failed: " + failed if failed else "none")}')
     # work/ is ignored, hence -f; the pathspec keeps anything else that happens to be staged out of the commit
     if commit and not bad and sh(['git', 'add', '-f', '--', *saved], check=False, cwd=HERE).returncode == 0:
         sh(['git', 'commit', '-q', '-m', f'route6 step {step}', '--', *saved], check=False, cwd=HERE)
@@ -268,43 +272,54 @@ def wanders(B, net, ratio=L3_RATIO):
 def too_long_to_pass(B, net, cl):
     """wanders, at the limit a finished net must meet. Stage 2 and the outputs are low-impedance, so length costs them little"""
     return wanders(B, net, L3_RATIO_LOW_Z if in_class(net, cl, 'P4_Stage2', 'P5_AudioOut') else L3_RATIO)
-def joined_off_top(B, net, at, ends):
-    """The net's vias at the points `at` and the inner-layer track that touches them, directly or through more of that track.
-    None if that track also reaches another via or a through-hole pad other than `ends`: it then serves a third pad as well."""
-    keep = {(round(x, 2), round(y, 2)) for x, y in at}
-    picked = [v for v in B.vias if v['net'] == net and (round(v['x'], 2), round(v['y'], 2)) in keep]
-    reach = [B.via_geom(v) for v in picked]
-    rest = [(s, B.seg_geom(s)) for s in B.segs if s['net'] == net and s['layer'] != 'F.Cu']
-    grew = True
-    while grew:
-        grew = False
-        for s, g in list(rest):
-            if any(g.intersects(r) for r in reach): picked.append(s); reach.append(g); rest.remove((s, g)); grew = True
-    others = [B.via_geom(v) for v in B.vias if v['net'] == net and v not in picked] + [B.pad_geom(p) for p in B.pads if p['net'] == net and p['drill'] and checks.label(p) not in ends]
-    return None if any(g.intersects(o) for g in reach for o in others) else picked
+def joined_off_top(B, net, ends_a, ends_b):
+    """The net's inner-layer tracks on the shortest way from one of its vias at the points `ends_a` to one at `ends_b`, or None unless
+    taking them out splits the net in two and no more: track on that way that also serves another pad must stay."""
+    vias = [v for v in B.vias if v['net'] == net]
+    def node(x, y):
+        v = next((v for v in vias if math.dist((x, y), (v['x'], v['y'])) <= v['size'] / 2), None)
+        return (round(v['x'], 2), round(v['y'], 2)) if v else (round(x, 3), round(y, 3))
+    adj = {}
+    for s in B.segs:
+        if s['net'] == net and s['layer'] != 'F.Cu':
+            a, b = node(s['x1'], s['y1']), node(s['x2'], s['y2']); d = math.dist((s['x1'], s['y1']), (s['x2'], s['y2']))
+            adj.setdefault(a, []).append((b, d, s)); adj.setdefault(b, []).append((a, d, s))
+    goal = {(round(x, 2), round(y, 2)) for x, y in ends_b}; done = set(); k = itertools.count()
+    heap = [(0.0, next(k), (round(x, 2), round(y, 2)), []) for x, y in ends_a]
+    while heap:
+        d, _, at, way = heapq.heappop(heap)
+        if at in done: continue
+        if at in goal:
+            if not way: return None
+            ids = {s['uuid'] for s in way}
+            return way if len(checks.pad_groups(B, net, ids)) == len(checks.pad_groups(B, net)) + 1 else None
+        done.add(at)
+        for to, step, s in adj.get(at, ()):
+            if to not in done: heapq.heappush(heap, (d + step, next(k), to, way + [s]))
 def top_again(nets, step):
     """A pair the via check flags has a legal top path within its limit, yet is joined through vias: the router took another
     way while other nets were in the way. Each such net is routed again on top alone and kept only if the whole net stays joined
     and passes the pass-1 judging; otherwise the board goes back."""
     for x in via_justify.check(bd.Board(BOARD), nets=[n for n in nets if bd.is_signal(n)]):
-        B = bd.Board(BOARD); n = x['net']; off = joined_off_top(B, n, x['vias'], (x['a'], x['b']))
+        B = bd.Board(BOARD); n = x['net']; off = joined_off_top(B, n, x['vias_a'], x['vias_b'])
         if not off or any(o['locked'] for o in off): continue
         shutil.copy(BOARD, BOARD + '.via'); before = copper_ids(B)
         B.remove([o['uuid'] for o in off]); B.save(BOARD)
-        try: router([n], ['F.Cu'], TOP_ONLY, add_only=True); why = refuse_top(bd.Board(BOARD), n, before)
+        try: router([n], ['F.Cu'], TOP_ONLY, add_only=True); drop_dangling([n], step); why = refuse_top(bd.Board(BOARD), n, before)
         except StepFailed as e: why = ('router', f'the retry failed ({e})')      # an optional clean-up must not cost the step what it already routed
         if why: shutil.copy(BOARD + '.via', BOARD)
         count(f'{step} flagged vias retried on top'); count(f'{step} flagged vias replaced on top', int(not why))
-        print(f"  {n} {x['a']} -> {x['b']}: " + (f'{why[1]}, vias kept' if why else f"now on top, {len(off)} pieces off the top layer removed"))
+        print(f"  {n} {x['a']} -> {x['b']}: " + (f'{why[1]}, vias kept' if why else f"now on top, {len(off)} inner-layer tracks removed"))
     if os.path.exists(BOARD + '.via'): os.remove(BOARD + '.via')
 def drop_dangling(nets, step):
-    """A pad via whose inner-layer join was made another way, or that its zone does not reach, joins nothing and is removed"""
+    """A pad via whose inner-layer join was made another way, or that its zone does not reach, joins nothing and is removed; so is a
+    track with an end that meets nothing, and then whatever that leaves loose"""
     B = bd.Board(BOARD); gone = []
     while True:                                                               # one at a time: of two vias joining the same pieces, each is spare only while the other stays
-        v = next((v for v in checks.dangling_vias(B, set(nets)) if not v['locked']), None)
-        if not v: break
-        B.remove([v['uuid']]); gone.append(f"{v['net']} ({v['x']:.2f}, {v['y']:.2f})")
-    if gone: B.save(BOARD); count(f'{step} vias joining nothing removed', len(gone)); print(f'  vias joining nothing removed: {gone}')
+        x = next((x for x in checks.dangling_vias(B, set(nets)) + checks.dangling_tracks(B, set(nets)) if not x['locked']), None)
+        if not x: break
+        B.remove([x['uuid']]); gone.append(f"{x['net']} {'via' if 'size' in x else 'track'} ({x.get('x', x.get('x1')):.2f}, {x.get('y', x.get('y1')):.2f})")
+    if gone: B.save(BOARD); count(f'{step} vias and tracks joining nothing removed', len(gone)); print(f'  vias and tracks joining nothing removed: {gone}')
 def wide_then_standard(nets, step):
     """Pass 3: router vias allowed, with wider gaps so it cannot bring back the squeezes pass 1 was rejected for. A widened clearance also
     shuts a net out of its own pad when that pad sits inside it, so what stays open gets one try at the standard clearances; route_signals
@@ -376,6 +391,7 @@ def route_signals(nets, step='2e'):
         if dropped: drop_new(B, dropped, held); count(f'{step} pass 3 routes dropped: {kind}', len(dropped)); print(f'  pass 3 routes dropped, {why}: {dropped}')
     B = bd.Board(BOARD); left = [n for n in again if checks.top_incomplete(B, n)]         # pass 4: a pad that was blocked in pass 2 may be free now
     if left: pad_vias_then_l3(left, f'{step} pass 4')
+    drop_dangling(nets, step)                                                 # first, so a stub left over does not change which vias the check flags
     top_again(nets, step)
     bias_out_of_the_way(nets, step)
     drop_dangling(nets, step)

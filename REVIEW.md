@@ -1,3 +1,37 @@
+# route6: reviewer feedback (23 Nov 2026)
+
+Reply to `FEEDBACK_23NOV.md`. KiCadRoutingTools v0.24.1, `BIAS_L3_COST=1.0`, supply on, 2d to 2i from each board's 2c.
+
+## `check --final` passes on 83962f0, with no warnings at all
+| Board | Before (`0cd0754`) | Now | `check --final` |
+|---|---|---|---|
+| 83962f0 | neck 408 mm / 17 vias, bridge 403 / 18 | neck 408 / 17, **bridge 401 / 17** | passes, 0 warnings |
+| 509fb5a | neck 409 / 15, bridge 415 / 11 | identical copper | passes |
+| mirrorB | neck 418 / 14, bridge 426 / 22 | neck 418 / 14, bridge 445 / 20 | passes |
+
+- **The dangling `/Bridge/SB` track** (your 166.0, 100.8) and the piece it led from are removed. A track with an end that
+  meets no copper of its net on its layer is removed at the end of 2e and 2i, repeated back along a stub, as long as the
+  net stays joined the same way; `check --final` fails on any left (`dangling_tracks`).
+- **That stub was hiding a real `/Bridge/SB` flag** (a 6.65 mm top path to R208.2), which the end-of-step top retry used to
+  skip because SB's L3 track also serves R207.1. The retry now lifts only the inner-layer track between the two flagged
+  pieces, if that splits the net in two and no more, routes them on top, and clears the vias left spare. On 83962f0 SB
+  goes to 25.1 mm / 2 vias (was 28.3 / 3) and `/Bridge/OB`'s C207.2 link goes on top as well (29.1 mm, was 27.6, same 3
+  vias), so no P5 warning is left either.
+- **Unjustified vias by class**, from `work/net_classes.json`: must-fix on P1-P3, a warning on P4-P6 (bias included, being
+  low-impedance like P4/P5), not reported on anything else, so `/BAT-` is gone. `checks.py --classes` does the same by hand.
+- **The second opinion on V+.** Its complaint was not R110 but U2/R209 and C307/U6: their vias sit on the V+ zone's edge
+  (C307.1's centre 0.15 mm outside it). With no KiCad here the router estimates the pour's fill, and that estimate stops
+  short of them; KiCad's fill does not. A zoned net whose every pad reaches its zone through copper by our count is now
+  listed apart ("by its estimate of the pour only", `krt_zone_fill_only`) instead of as unconnected. Setting
+  `KICAD_PYTHON` to KiCad's Python should make the router's own check agree outright; not tried, KiCad is not installed here.
+- **A via where two tracks end at different points, away from a pad, is kept.** Without it the ends would be 0.07 mm
+  apart and the router's DRC flags the gap; that happened once while building this.
+
+mirrorB's bridge is 19 mm longer: `/Bridge/OB` now goes on top in 2e (one via fewer), and `/Bridge/OA`, routed after it
+in 2i, comes out 15 mm longer. mirrorB is the old placement; 83962f0 and 509fb5a show nothing like it.
+
+---
+
 # route6: reviewer feedback (22 Nov 2026, fifth)
 
 Reply to `FEEDBACK_22NOV_LATE.md`. KiCadRoutingTools v0.24.1, `BIAS_L3_COST=1.0`, supply on.

@@ -49,6 +49,7 @@ def net_flags(B, net, max_gap, include_decaps, width):
             flags.append(dict(net=net, a=pa[2], b=pb[2], at=[round(pa[0], 2), round(pa[1], 2)], to=[round(pb[0], 2), round(pb[1], 2)],
                               gap=round(g, 2), top_path=round(r[0], 2), limit=round(lim, 2),
                               vias=[[round(v['x'], 2), round(v['y'], 2)] for c in (comps[a], comps[b]) for v in c['vias']],
+                              vias_a=[[round(v['x'], 2), round(v['y'], 2)] for v in comps[a]['vias']], vias_b=[[round(v['x'], 2), round(v['y'], 2)] for v in comps[b]['vias']],
                               path=[[round(x, 3), round(y, 3)] for x, y in r[1]]))
     return flags
 

@@ -1,9 +1,9 @@
 """One report after every routing step. Exit code 1 if anything in FAIL is non-empty.
-usage: checks.py BOARD [--json OUT] [--final] [--no-justify]
+usage: checks.py BOARD [--json OUT] [--final] [--no-justify] [--classes work/net_classes.json]
 Checks: unconnected nets, copper clearance (per layer, plus vias and holes through every layer), copper to board edge,
 high-impedance nets top-only with no vias, no vias in the hand-swap resistor pads, placement symmetry (mirror or copy),
 unjustified vias (via_justify.py). KiCad's own DRC stays the final authority; this is the fast inner loop."""
-import sys, json, math, re, argparse, itertools
+import sys, json, math, re, argparse, itertools, fnmatch
 from shapely.strtree import STRtree
 from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
@@ -20,7 +20,7 @@ def is_tp(pad): return pad['ref'].startswith('TP')
 def label(pad): return f"{pad['ref']}.{pad['num']}"
 
 def pad_groups(B, net, without=()):
-    """The net's pads as lists of pads joined by copper, leaving out the vias whose uuids are in `without`.
+    """The net's pads as lists of pads joined by copper, leaving out the tracks and vias whose uuids are in `without`.
     A net with a zone counts everything on that zone's layers that lies on the zone (vias, through-hole pads, pads in the pour) as joined."""
     zoned = {}
     for z in B.zones:
@@ -30,7 +30,7 @@ def pad_groups(B, net, without=()):
     for p in B.pads:
         if p['net'] == net and p['layers']: items.append((p['layers'], B.pad_geom(p), p))
     for s in B.segs:
-        if s['net'] == net: items.append(({s['layer']}, B.seg_geom(s), None))
+        if s['net'] == net and s['uuid'] not in without: items.append(({s['layer']}, B.seg_geom(s), None))
     for v in B.vias:
         if v['net'] == net and v['uuid'] not in without: items.append((set(bd.LAYERS6), B.via_geom(v), None))
     if not items: return []
@@ -117,18 +117,45 @@ def no_via_pads(B):
     return out
 
 def via_layers(B, v):
-    """The layers on which the via meets copper of its own net: a track, a pad or one of the net's zones"""
+    """The layers on which the via meets copper of its own net: a track, a pad or one of the net's zones. A track lying wholly
+    inside the via leads nowhere, so it does not count."""
     g = B.via_geom(v); near = lambda x, y, r: math.dist((v['x'], v['y']), (x, y)) < r + v['size'] / 2
     out = {s['layer'] for s in B.segs if s['net'] == v['net'] and near(s['x1'], s['y1'], math.dist((s['x1'], s['y1']), (s['x2'], s['y2'])) + s['w'])
-           and g.intersects(B.seg_geom(s))}
+           and g.intersects(B.seg_geom(s)) and not (near(s['x1'], s['y1'], 0) and near(s['x2'], s['y2'], 0))}
     out |= {l for p in B.pads if p['net'] == v['net'] and near(p['x'], p['y'], max(p['w'], p['h'])) and g.intersects(B.pad_geom(p)) for l in p['layers']}
     return out | {l for z in B.zones if z['net'] == v['net'] and len(z['pts']) > 2 and Polygon(z['pts']).intersects(g) for l in z['layers']}
 
+def joins_track_ends(B, v):
+    """Two or more of its net's tracks end inside the via at different points and outside its pads, so without the via those ends
+    would not meet"""
+    inside = lambda x, y: math.dist((v['x'], v['y']), (x, y)) < v['size'] / 2
+    pads = [(p['layers'], B.pad_geom(p)) for p in B.pads if p['net'] == v['net'] and math.dist((v['x'], v['y']), (p['x'], p['y'])) < max(p['w'], p['h']) + v['size']]
+    ends = {(round(x, 3), round(y, 3)) for s in B.segs if s['net'] == v['net'] and not (inside(s['x1'], s['y1']) and inside(s['x2'], s['y2']))
+            for x, y in ((s['x1'], s['y1']), (s['x2'], s['y2'])) if inside(x, y) and not any(s['layer'] in L and g.contains(Point(x, y)) for L, g in pads)}
+    return len(ends) > 1
+
 def dangling_vias(B, nets=None):
-    """Vias that join nothing: they meet their net's copper on fewer than two layers, and the net's pads stay joined as they are
-    without them (KiCad DRC: via is not connected)"""
-    return [v for v in B.vias if (nets is None or v['net'] in nets) and len(via_layers(B, v)) < 2
+    """Vias that join nothing: they meet their net's copper on fewer than two layers, are not where its tracks end at different points
+    away from its pads (without the via those ends would not meet), and the net's pads stay joined as they are without them (KiCad DRC: via is not connected)"""
+    return [v for v in B.vias if (nets is None or v['net'] in nets) and len(via_layers(B, v)) < 2 and not joins_track_ends(B, v)
             and len(pad_groups(B, v['net'], {v['uuid']})) == len(pad_groups(B, v['net']))]
+
+def dangling_tracks(B, nets=None):
+    """Tracks with an end that meets no copper of their net on their layer, and without which the net's pads stay joined as they are
+    (KiCad DRC: track has an unconnected end)"""
+    out = []
+    for s in B.segs:
+        if nets is not None and s['net'] not in nets: continue
+        mine = [g for n, g, k, o in B.copper(s['layer']) if n == s['net'] and o is not s]
+        mine += [Polygon(z['pts']) for z in B.zones if z['net'] == s['net'] and s['layer'] in z['layers'] and len(z['pts']) > 2]
+        loose = any(not any(Point(x, y).buffer(s['w'] / 2, 8).intersects(g) for g in mine) for x, y in ((s['x1'], s['y1']), (s['x2'], s['y2'])))
+        if loose and len(pad_groups(B, s['net'], {s['uuid']})) == len(pad_groups(B, s['net'])): out.append(s)
+    return out
+
+def priority(net, classes):
+    """The number of the highest-priority class the net is in (P1_Gate -> 1), or None"""
+    return min((int(m.group(1)) for c, pats in (classes or {}).items() for m in [re.match(r'P(\d+)_', c)]
+                if m and any(fnmatch.fnmatchcase(net, p) for p in pats)), default=None)
 
 def zone_integrity(B):
     """A supply zone must still join all of its own vias once every other net's copper on its layer, with clearance, is cut out of it.
@@ -164,8 +191,10 @@ def symmetry(B, cx=None, shift=None, tol=0.02):
         if not (mir or cl): out.append(dict(ref=r, twin=t['ref'], dx_mirror=round(2 * cx - f['x'] - t['x'], 3), dx_copy=round(f['x'] + (shift or 0) - t['x'], 3), dy=round(f['y'] - t['y'], 3)))
     return out
 
-def report(B, justify=True, timing=None):
-    """timing: a dict that receives seconds per check, so a slow step can be traced to the check that costs it"""
+def report(B, justify=True, timing=None, classes=None):
+    """timing: a dict that receives seconds per check, so a slow step can be traced to the check that costs it.
+    classes: the net classes ({class: [patterns]}); with them an unjustified via is must-fix on P1-P3, a warning on P4-P6 and not
+    reported on any other net (power and battery nets are low-impedance, so a via costs nothing there)"""
     import time; R = {}
     def run(key, fn):
         t0 = time.perf_counter(); R[key] = fn()
@@ -173,18 +202,24 @@ def report(B, justify=True, timing=None):
     for key, fn in (('unconnected', unconnected), ('clearance', clearances), ('holes', holes), ('edge', edge), ('hz', hz_rule), ('no_via_pads', no_via_pads), ('zone_integrity', zone_integrity), ('symmetry', symmetry)):
         run(key, lambda fn=fn: fn(B))
     run('dangling_vias', lambda: [dict(net=v['net'], at=[round(v['x'], 2), round(v['y'], 2)]) for v in dangling_vias(B)])
+    run('dangling_tracks', lambda: [dict(net=s['net'], layer=s['layer'], at=[round(s['x1'], 2), round(s['y1'], 2), round(s['x2'], 2), round(s['y2'], 2)]) for s in dangling_tracks(B)])
     if justify:
         import via_justify; run('unjustified_vias', lambda: [{k: v for k, v in x.items() if k != 'path'} for x in via_justify.check(B)])
+        if classes is not None:
+            rank = lambda x: priority(x['net'], classes) or 99
+            R['unjustified_warnings'] = [x for x in R['unjustified_vias'] if 4 <= rank(x) <= 6]
+            R['unjustified_vias'] = [x for x in R['unjustified_vias'] if rank(x) <= 3]
     R['stats'] = dict(tracks=len(B.segs), vias=len(B.vias),
                       length={l: round(sum(math.dist((s['x1'], s['y1']), (s['x2'], s['y2'])) for s in B.segs if s['layer'] == l), 1) for l in B.copper_layers})
     return R
 FAIL = ('clearance', 'holes', 'edge', 'hz', 'no_via_pads', 'zone_integrity', 'krt_drc')   # must be empty at every stage; krt_drc is stage_route's second opinion
-FINAL = ('unconnected', 'unjustified_vias', 'dangling_vias')       # must be empty at the end; symmetry is always informational (some differences are deliberate)
+FINAL = ('unconnected', 'unjustified_vias', 'dangling_vias', 'dangling_tracks')   # must be empty at the end; symmetry is always informational (some differences are deliberate)
 def must_fix(R, final=False): return {k: len(R[k]) for k in FAIL + (FINAL if final else ()) if R.get(k)}
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(); ap.add_argument('board'); ap.add_argument('--json'); ap.add_argument('--no-justify', action='store_true'); ap.add_argument('--final', action='store_true')
-    a = ap.parse_args(); B = bd.Board(a.board); R = report(B, not a.no_justify); must = must_fix(R, a.final)
+    ap.add_argument('--classes', help='net classes as setup saves them (work/net_classes.json)')
+    a = ap.parse_args(); B = bd.Board(a.board); R = report(B, not a.no_justify, classes=json.load(open(a.classes)) if a.classes else None); must = must_fix(R, a.final)
     for k, v in R.items():
         if k == 'stats': print('stats', v); continue
         tag = 'FAIL' if k in must else ('note' if v else 'ok  ')

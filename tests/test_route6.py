@@ -135,7 +135,7 @@ def test_stage_fails_when_a_script_it_runs_fails():
 def test_only_final_fails_on_unconnected_nets(bare, work, monkeypatch):
     bare.save(stage_route.BOARD)
     unfinished = dict({k: [] for k in checks.FAIL + checks.FINAL}, unconnected=[dict(net='X')], stats=dict(tracks=0, vias=0))
-    monkeypatch.setattr(checks, 'report', lambda B, justify=True, timing=None: unfinished)
+    monkeypatch.setattr(checks, 'report', lambda B, justify=True, timing=None, classes=None: unfinished)
     assert stage_route.finish('check', False) == 0 and stage_route.finish('check', False, final=True) == 1
 @pytest.mark.skipif(not krt_checks.configured(), reason='needs ROUTER_DIR (KiCadRoutingTools checkout)')
 def test_the_router_drc_agrees_that_links_and_drops_are_clean(linked, tmp_path):
@@ -157,7 +157,7 @@ def test_a_failed_step_puts_the_board_back(bare, work, monkeypatch):
     def step_that_breaks(step, src):
         B = bd.Board(stage_route.BOARD); track(B, 'X', [(110, 100), (111, 100)]); B.save(); raise stage_route.StepFailed('broke')
     monkeypatch.setattr(stage_route, 'run_step', step_that_breaks); monkeypatch.setattr(krt_checks, 'configured', lambda: False)
-    monkeypatch.setattr(checks, 'report', lambda B, justify=True, timing=None: dict({k: [] for k in checks.FAIL + checks.FINAL}, stats=dict(tracks=0, vias=0)))
+    monkeypatch.setattr(checks, 'report', lambda B, justify=True, timing=None, classes=None: dict({k: [] for k in checks.FAIL + checks.FINAL}, stats=dict(tracks=0, vias=0)))
     monkeypatch.setattr(sys, 'argv', ['stage_route.py', '2b'])
     with pytest.raises(SystemExit) as e: stage_route.main()
     assert e.value.code == 1 and open(stage_route.BOARD, 'rb').read() == good
@@ -416,7 +416,9 @@ def _front_end_round_bias(bare, work, monkeypatch, long=True, bias_back=6.0):
         if n in nets: track(C, n, [(a['x'], a['y']), (b['x'], b['y'])], layer='In2.Cu')
         if 'PB' in nets: track(C, 'PB', [(mx + 20, my), (mx + 20, my + bias_back)], w=0.4, layer='In2.Cu')
         C.save(stage_route.BOARD + '.tmp'); return dict(returncode=0)
-    monkeypatch.setattr(stage_route, 'run_router', run); return n, calls
+    monkeypatch.setattr(stage_route, 'run_router', run)
+    monkeypatch.setattr(checks, 'dangling_tracks', lambda B, nets=None: [])           # the stand-in's bias tracks lead nowhere; only the decision is tested
+    return n, calls
 def l3(B, n): return sum(math.dist((s['x1'], s['y1']), (s['x2'], s['y2'])) for s in B.segs if s['net'] == n and s['layer'] == 'In2.Cu')
 def test_a_long_front_end_net_is_routed_again_with_the_bias_moved_out_of_its_way(bare, work, monkeypatch):
     n, calls = _front_end_round_bias(bare, work, monkeypatch); before = l3(bd.Board(stage_route.BOARD), n)
@@ -441,3 +443,30 @@ def test_a_rail_pad_beyond_the_other_rails_zone_joins_its_own_through_one_l3_hop
     bare.save(stage_route.BOARD); assert stage_route.hop_to_zone() == [checks.label(a)]; B = bd.Board(stage_route.BOARD)
     hop = [s for s in B.segs if s['net'] == 'V+']
     assert joined(B) and len(B.vias) == 2 and hop and {s['layer'] for s in hop} == {'In2.Cu'} and checks.clearances(B) == []
+def test_unjustified_vias_are_must_fix_on_p1_to_p3_a_warning_on_p4_to_p6_and_not_reported_elsewhere():
+    R = checks.report(bd.Board(OLD), classes={'P2_FrontEnd': ['V+'], 'P5_AudioOut': ['V-'], 'P7_Power': ['/BAT*']})   # the old board flags V+, V-, /BAT+ and /BAT-
+    assert {x['net'] for x in R['unjustified_vias']} == {'V+'} and {x['net'] for x in R['unjustified_warnings']} == {'V-'}
+    assert 'unjustified_warnings' not in checks.must_fix(R, final=True) and 'unjustified_vias' in checks.must_fix(R, final=True)
+def test_a_track_stub_is_removed_back_to_where_it_joins(bare, work):
+    n = close_pairs(bare)[0]; straight(bare, n); a, b = ends(bare, n)
+    track(bare, n, [(a['x'], a['y']), (a['x'], a['y'] - 2), (a['x'] + 2, a['y'] - 2)])                    # two pieces leading nowhere
+    assert [s['net'] for s in checks.dangling_tracks(bare)] == [n]
+    bare.save(stage_route.BOARD); stage_route.drop_dangling([n], 'test'); B = bd.Board(stage_route.BOARD)
+    assert len(B.segs) == 1 and not checks.top_incomplete(B, n) and checks.dangling_tracks(B) == []
+def test_a_flagged_pair_on_a_shared_inner_track_moves_to_top_and_the_third_pad_stays_joined(bare, work, monkeypatch):
+    monkeypatch.setenv('ROUTER_DIR', str(work)); P = drops.Placer(bare)
+    def three(n):
+        ps = [p for p in ends(bare, n) if drops.smd_top(p) and P.spot(p)]
+        for a, b, c in itertools.permutations(ps, 3):
+            if math.dist((a['x'], a['y']), (b['x'], b['y'])) < 4 and min(math.dist((c['x'], c['y']), (q['x'], q['y'])) for q in (a, b)) > 9: return a, b, c
+    n, (a, b, c) = next((n, t) for n in bare.nets if bd.is_signal(n) and len(ends(bare, n)) == 3 for t in [three(n)] if t)
+    va, vb, vc = (P.spot(p)[:2] for p in (a, b, c)); bare.add([bare.via_text(*v, 0.5, 0.3, n) for v in (va, vb, vc)])
+    track(bare, n, [vc, va], layer='In2.Cu'); track(bare, n, [va, vb], layer='In2.Cu')                    # one inner track serving all three pads
+    assert any({x['a'], x['b']} == {checks.label(a), checks.label(b)} for x in via_justify.check(bare, nets=[n]))
+    bare.save(stage_route.BOARD)
+    def run(cmd, cwd):
+        C = bd.Board(stage_route.BOARD); track(C, n, [(a['x'], a['y']), (b['x'], b['y'])]); C.save(stage_route.BOARD + '.tmp'); return dict(returncode=0)
+    monkeypatch.setattr(stage_route, 'run_router', run)
+    stage_route.top_again([n], 'test'); B = bd.Board(stage_route.BOARD)
+    inner = [s for s in B.segs if s['net'] == n and s['layer'] == 'In2.Cu']
+    assert not checks.top_incomplete(B, n) and len(inner) == 1 and len([v for v in B.vias if v['net'] == n]) == 2

@@ -6,7 +6,7 @@ Step-by-step 6-layer routing helpers for the humbucker preamp board. Start with 
     python via_justify.py tests/board_4layer_rev1.kicad_pcb
     python stage_route.py setup --from ../../../humbucker-preamp.kicad_pcb
     python stage_route.py 2b                  # then 2c; steps 2a, 2p, 2d, 2e, 2i, 2f also need ROUTER_DIR
-    python stage_route.py check --final       # also fails on unconnected nets, unjustified vias and vias that join nothing
+    python stage_route.py check --final       # also fails on unconnected nets, unjustified vias (P1-P3) and copper that joins nothing
 
 Everything is written to `work/`. The project board is only read.
 
@@ -33,11 +33,14 @@ failed stays in `work/<step>.kicad_pcb` to look at. A board with arc tracks is r
   copies those nets, skipping any whose copy would collide with copper that is staying, and `2i` routes whatever the copy
   did not cover. When no net has a twin (channels laid out by hand), `2h` copies nothing and passes.
 - `2e` and `2i` fail on a net left open or one off the top layer longer than max(1.8 x its tree, tree + 12 mm); P4 and P5
-  nets, being low-impedance, get 2.2 x. Both remove the vias that end up joining nothing (a pad via whose L3 join was made
-  another way); `2d` does the same for the battery and bias vias. A V+ or V- via its zone misses is left for
-  `check --final` to report. Before that, a front-end net joined off the top layer at over 1.5 x its tree, with bias
-  track on L3 in its way, is joined again with that bias lifted and the bias routed again round it; kept only if the
-  class-weighted total drops and nothing else gets worse.
+  nets, being low-impedance, get 2.2 x. Both remove the vias and tracks that end up joining nothing (a pad via whose L3
+  join was made another way, a track stub with a free end); `2d` does the same for the battery and bias vias. A V+ or V-
+  via its zone misses is left for `check --final` to report. A pair the via check flags is routed again on top, with only
+  the inner-layer track between the two pieces lifted. A front-end net joined off the top layer at over 1.5 x its tree,
+  with bias track on L3 in its way, is joined again with that bias lifted and the bias routed again round it; kept only if
+  the class-weighted total drops and nothing else gets worse.
+- With the net classes from setup, an unjustified via is must-fix on P1-P3, a warning on P4-P6 and not reported on any
+  other net (power, battery and ground are low-impedance, so a via costs nothing there).
 - `2f` puts a via in each loose test point where one fits and has the router reach the rest by a track.
 
 ## The router (KiCadRoutingTools)
@@ -46,8 +49,10 @@ Set `ROUTER_DIR` to a checkout of https://github.com/drandyhaas/KiCadRoutingTool
 1. Steps 2a, 2p, 2d, 2e, 2i and 2f call its `py_router/route.py`, and 2d also its `py_router/route_planes.py`. That needs its compiled extension (`python build_router.py` there).
 2. With `ROUTER_DIR` set, every step also gets a second opinion from its DRC and connectivity check (`krt_checks.py`).
    This part needs only `scipy` and `Pillow`, not the compiled extension. Its DRC items are must-fix. Nets that only it
-   calls unconnected are listed as `krt_unconnected_extra` and are for a human to settle in KiCad after refilling zones:
-   route6 counts copper that touches a zone's outline on its layer as in the pour, the router models the pour from that outline.
+   calls unconnected are listed as `krt_unconnected_extra` and are for a human to settle in KiCad after refilling zones.
+   Without KiCad's own refill (`KICAD_PYTHON`) the router estimates a pour's fill, and that estimate misses vias on a zone's
+   edge that KiCad's fill reaches; so a zoned net whose every pad reaches its zone through copper by route6's count is
+   listed apart, as `krt_zone_fill_only`, and left to KiCad's DRC.
 
 Without `ROUTER_DIR` the second opinion is skipped and the step says so.
 
