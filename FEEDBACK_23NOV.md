@@ -29,3 +29,17 @@ configuration" items come only from running DRC on a copy outside the project fo
 - **`/Bridge/SB`**: the dangling track above.
 
 Result wanted: `check --final` passes on 83962f0 with only P5 warnings, and its second opinion agrees with KiCad.
+
+## Addendum: one leftover after `345d035`
+Accepted: `check --final` passes on 83962f0 with 0 warnings here too (bridge 401 / 17, neck 408 / 17, 62 tests pass), and
+KiCad DRC with zones refilled finds 0 unconnected pads and no dangling track.
+
+KiCad does find one new item: **`via_dangling` on `/Bridge/OB` at (171.35, 94.85) absolute, board-relative (71.35, 14.85)**:
+"connected on only one layer". It is a via with one 0.49 mm F.Cu track to it and nothing else (no pad within 1 mm, no
+L3 copper). It is what was left when the top retry moved OB's C207.2 link on top.
+
+Each cleanup excuses it because of the other: the via has copper on F.Cu (the stub), and the stub's end meets copper (the
+via). Please treat a via plus the tracks hanging off it as one piece: if removing a via **and** the stub that leads only
+to it leaves the net joined the same way, remove both, and repeat back along the stub. Run it after the top retry (it
+made this one). `check --final` should fail on a via whose copper is on one layer only, whatever touches it there, which
+is KiCad's own test. Test: a net with a pad, a track to a via, and nothing else on that via loses both.
