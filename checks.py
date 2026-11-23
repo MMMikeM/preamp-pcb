@@ -125,20 +125,18 @@ def via_layers(B, v):
     out |= {l for p in B.pads if p['net'] == v['net'] and near(p['x'], p['y'], max(p['w'], p['h'])) and g.intersects(B.pad_geom(p)) for l in p['layers']}
     return out | {l for z in B.zones if z['net'] == v['net'] and len(z['pts']) > 2 and Polygon(z['pts']).intersects(g) for l in z['layers']}
 
-def joins_track_ends(B, v):
-    """Two or more of its net's tracks end inside the via at different points and outside its pads, so without the via those ends
-    would not meet"""
+def ends_in(B, v):
+    """The ends of its net's tracks that lie inside the via and outside its pads, as {(layer, x, y): width}: without the via, two of
+    them at different points would not meet. Tracks wholly inside the via lead nowhere and are left out."""
     inside = lambda x, y: math.dist((v['x'], v['y']), (x, y)) < v['size'] / 2
     pads = [(p['layers'], B.pad_geom(p)) for p in B.pads if p['net'] == v['net'] and math.dist((v['x'], v['y']), (p['x'], p['y'])) < max(p['w'], p['h']) + v['size']]
-    ends = {(round(x, 3), round(y, 3)) for s in B.segs if s['net'] == v['net'] and not (inside(s['x1'], s['y1']) and inside(s['x2'], s['y2']))
+    return {(s['layer'], round(x, 4), round(y, 4)): s['w'] for s in B.segs if s['net'] == v['net'] and not (inside(s['x1'], s['y1']) and inside(s['x2'], s['y2']))
             for x, y in ((s['x1'], s['y1']), (s['x2'], s['y2'])) if inside(x, y) and not any(s['layer'] in L and g.contains(Point(x, y)) for L, g in pads)}
-    return len(ends) > 1
 
 def dangling_vias(B, nets=None):
-    """Vias that join nothing: they meet their net's copper on fewer than two layers, are not where its tracks end at different points
-    away from its pads (without the via those ends would not meet), and the net's pads stay joined as they are without them (KiCad DRC: via is not connected)"""
-    return [v for v in B.vias if (nets is None or v['net'] in nets) and len(via_layers(B, v)) < 2 and not joins_track_ends(B, v)
-            and len(pad_groups(B, v['net'], {v['uuid']})) == len(pad_groups(B, v['net']))]
+    """Vias that meet their net's copper on fewer than two layers, whatever touches them on that one (KiCad DRC: via is connected
+    on only one layer)"""
+    return [v for v in B.vias if (nets is None or v['net'] in nets) and len(via_layers(B, v)) < 2]
 
 def dangling_tracks(B, nets=None):
     """Tracks with an end that meets no copper of their net on their layer, and without which the net's pads stay joined as they are

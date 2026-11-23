@@ -380,15 +380,20 @@ def test_a_ground_pad_with_no_zone_connection_is_linked_on_top(bare, work):
     assert cut and {checks.label(p) for p in cut} <= loose(bare)                          # the pours do not reach them, so the check must not count them joined
     bare.save(stage_route.BOARD); stage_route.link_unpoured_ground(); B = bd.Board(stage_route.BOARD)
     assert not {checks.label(p) for p in cut} & loose(B) and checks.clearances(B) == [] and {s['layer'] for s in B.segs} == {'F.Cu'}
-def test_a_via_joining_nothing_is_removed_but_one_joining_two_tracks_is_kept(bare, work):
+def test_a_via_on_one_layer_is_removed_and_track_ends_that_met_through_it_are_joined(bare, work):
     n, m = close_pairs(bare)[:2]
     straight(bare, n); a, b = ends(bare, n); bare.add([bare.via_text(a['x'], a['y'], 0.45, 0.2, n)])          # a pad via whose L3 join was never made
     a, b = ends(bare, m); x, y = (a['x'] + b['x']) / 2, (a['y'] + b['y']) / 2; d = math.dist((a['x'], a['y']), (b['x'], b['y'])); ux, uy = (b['x'] - a['x']) / d, (b['y'] - a['y']) / d
     track(bare, m, [(a['x'], a['y']), (x - 0.2 * ux, y - 0.2 * uy)]); track(bare, m, [(x + 0.2 * ux, y + 0.2 * uy), (b['x'], b['y'])])
     bare.add([bare.via_text(x, y, 0.45, 0.2, m)])                                         # two top tracks that meet only through this via
-    assert {v['net'] for v in checks.dangling_vias(bare)} == {n} and {v['net'] for v in bare.vias if len(checks.via_layers(bare, v)) < 2} == {n, m}
+    assert {v['net'] for v in checks.dangling_vias(bare)} == {n, m}                        # KiCad's test: copper on one layer only, whatever it joins there
     bare.save(stage_route.BOARD); stage_route.drop_dangling([n, m], 'test'); B = bd.Board(stage_route.BOARD)
-    assert [v['net'] for v in B.vias] == [m] and not checks.top_incomplete(B, m)
+    assert not B.vias and not checks.top_incomplete(B, m) and not checks.top_incomplete(B, n) and checks.dangling_tracks(B) == []
+def test_a_via_with_only_a_track_from_a_pad_goes_with_that_track(bare, work):
+    n = close_pairs(bare)[0]; straight(bare, n); a, b = ends(bare, n)
+    track(bare, n, [(a['x'], a['y']), (a['x'] + 1.5, a['y'] + 1.5)]); bare.add([bare.via_text(a['x'] + 1.5, a['y'] + 1.5, 0.45, 0.2, n)])
+    bare.save(stage_route.BOARD); stage_route.drop_dangling([n], 'test'); B = bd.Board(stage_route.BOARD)
+    assert not B.vias and len(B.segs) == 1 and not checks.top_incomplete(B, n)
 def test_stage_2_and_the_outputs_may_run_longer_off_the_top_layer(bare):
     n = next(n for n in bare.nets if bd.is_signal(n) and stage_route.length_and_tree(bare, n)[1] > 16)
     t = stage_route.length_and_tree(bare, n)[1]; p = ends(bare, n)[0]; track(bare, n, [(p['x'], p['y']), (p['x'], p['y'] + 2 * t)], layer='In2.Cu')

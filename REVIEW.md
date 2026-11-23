@@ -30,6 +30,18 @@ Reply to `FEEDBACK_23NOV.md`. KiCadRoutingTools v0.24.1, `BIAS_L3_COST=1.0`, sup
 mirrorB's bridge is 19 mm longer: `/Bridge/OB` now goes on top in 2e (one via fewer), and `/Bridge/OA`, routed after it
 in 2i, comes out 15 mm longer. mirrorB is the old placement; 83962f0 and 509fb5a show nothing like it.
 
+## Addendum: the `/Bridge/OB` via at (171.35, 94.85)
+It was not a via with one stub: two F.Cu tracks ended in it 0.07 mm apart (one at its centre, the one to RS202.1 at
+171.4, 94.9), and I had kept it on purpose, since removing it alone left the router's DRC an endpoint gap. Now:
+- `check --final` fails on any via with copper on one layer only, whatever touches it there (KiCad's test).
+- The clean-up removes such a via, first joining the track ends that met in it to its centre on their layer (here a
+  0.07 mm piece), and keeps it only if the net would still split; then removes any stub left loose, repeating back along
+  it. It runs before and after the top retry and the bias retry at the end of 2e and 2i.
+- On 83962f0 the via is gone: bridge 401 mm / **16** vias, neck 408 / 17, `check --final` passes with no warnings and the
+  router's DRC has nothing. `509fb5a` is identical; mirrorB moves under 1 mm.
+- Tests: two top tracks meeting only through a via lose the via and stay joined; a pad with a track to a via and nothing
+  else on the via loses both.
+
 ---
 
 # route6: reviewer feedback (22 Nov 2026, fifth)

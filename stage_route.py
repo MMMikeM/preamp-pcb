@@ -312,13 +312,20 @@ def top_again(nets, step):
         print(f"  {n} {x['a']} -> {x['b']}: " + (f'{why[1]}, vias kept' if why else f"now on top, {len(off)} inner-layer tracks removed"))
     if os.path.exists(BOARD + '.via'): os.remove(BOARD + '.via')
 def drop_dangling(nets, step):
-    """A pad via whose inner-layer join was made another way, or that its zone does not reach, joins nothing and is removed; so is a
-    track with an end that meets nothing, and then whatever that leaves loose"""
-    B = bd.Board(BOARD); gone = []
+    """A via with copper on one layer only (a pad via whose inner-layer join was made another way, or what a top retry left) is removed,
+    and so is a track with an end that meets nothing, then whatever that leaves loose. Track ends that met only through the via are
+    first joined to its centre on their layer, so the net stays joined as it was; a via whose removal would still split the net is kept."""
+    B = bd.Board(BOARD); gone = []; kept = set()
     while True:                                                               # one at a time: of two vias joining the same pieces, each is spare only while the other stays
-        x = next((x for x in checks.dangling_vias(B, set(nets)) + checks.dangling_tracks(B, set(nets)) if not x['locked']), None)
+        x = next((x for x in checks.dangling_vias(B, set(nets)) + checks.dangling_tracks(B, set(nets)) if not x['locked'] and x['uuid'] not in kept), None)
         if not x: break
-        B.remove([x['uuid']]); gone.append(f"{x['net']} {'via' if 'size' in x else 'track'} ({x.get('x', x.get('x1')):.2f}, {x.get('y', x.get('y1')):.2f})")
+        if 'size' in x:
+            was = len(checks.pad_groups(B, x['net'])); keep = B.text; ends = checks.ends_in(B, x)
+            if len(ends) > 1: B.add([B.seg_text(ex, ey, x['x'], x['y'], w, layer, x['net']) for (layer, ex, ey), w in ends.items() if math.dist((ex, ey), (x['x'], x['y'])) > 1e-4])
+            B.remove([x['uuid']])
+            if len(checks.pad_groups(B, x['net'])) > was: B.text = keep; B._parse(); kept.add(x['uuid']); continue
+        else: B.remove([x['uuid']])
+        gone.append(f"{x['net']} {'via' if 'size' in x else 'track'} ({x.get('x', x.get('x1')):.2f}, {x.get('y', x.get('y1')):.2f})")
     if gone: B.save(BOARD); count(f'{step} vias and tracks joining nothing removed', len(gone)); print(f'  vias and tracks joining nothing removed: {gone}')
 def wide_then_standard(nets, step):
     """Pass 3: router vias allowed, with wider gaps so it cannot bring back the squeezes pass 1 was rejected for. A widened clearance also
