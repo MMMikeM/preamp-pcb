@@ -9,7 +9,8 @@
     python stage_route.py 2h     # copy the routing to the other channel                 (mirror_route.py)
     python stage_route.py 2i     # what the copy did not cover: links, then the router   (neighbour_links.py, router as in 2a and 2e)
     python stage_route.py 2f     # test points: via in pad                               (drops.py --testpoints, router)
-    python stage_route.py check  # report only; add --final to also fail on unconnected nets and unjustified vias
+    python stage_route.py check  # report only; add --final to also fail on unconnected nets, unjustified vias and nets too long
+                                 # off the top layer; --board PATH checks that board instead of the work one
 A step exits 1 if a script or the router it runs exits non-zero, or if a must-fix check is not empty. It then puts
 work/board.kicad_pcb back to what it was before the step; the result that failed stays in work/<step>.kicad_pcb to look at.
 Steps 2a, 2p, 2b and 2e leave alone the nets that 2h will make by copying; everything else on both channels is routed in
@@ -17,7 +18,7 @@ its class's step. 2i routes what the copy did not cover.
 With ROUTER_DIR set, every step also gets a second opinion from the router's own DRC and connectivity check (krt_checks.py).
 2g (tidy) is manual review for now. WORK defaults to ./work/board.kicad_pcb; every step keeps work/<step>.kicad_pcb as well.
 The router is KiCadRoutingTools (not included): set ROUTER_DIR to its checkout. Steps 2b, 2c, 2h, check and setup do not need it."""
-import sys, os, subprocess, shutil, argparse, json, math, time, re, contextlib, fnmatch, heapq, itertools
+import sys, os, subprocess, shutil, argparse, json, math, time, re, contextlib, fnmatch, heapq, itertools, signal
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import board as bd, toplink as tl, checks, krt_checks, mirror_route, drops, via_justify, hand_access
 from shapely.geometry import LineString, Point, Polygon, box
@@ -59,11 +60,19 @@ def write_timing(step, total):
     json.dump(out, open(os.path.join(WORK, f'{step}_timing.json'), 'w'), indent=1); print(out['summary'])
     if TIMING['counts']: print(f'[{step}] counts:', ', '.join(f'{k} {v}' for k, v in TIMING['counts'].items()))
 
+# a process that dies without a traceback was killed from outside it; on Windows the exit code is the NTSTATUS of the crash
+NTSTATUS = {0xC0000017: 'ran out of memory', 0xC0000005: 'crashed (access violation)', 0xC00000FD: 'crashed (stack overflow)', 0xC0000409: 'crashed (stack buffer overrun)'}
+def how_it_ended(name, code):
+    if code < 0:
+        sig = signal.Signals(-code).name if -code in signal.valid_signals() else f'signal {-code}'
+        return f"{name} was killed by {sig}" + (', probably out of memory' if sig == 'SIGKILL' else '') + ': not a routing result'
+    if code & 0xFFFFFFFF in NTSTATUS: return f'{name} {NTSTATUS[code & 0xFFFFFFFF]}, exit {code & 0xFFFFFFFF:#x}: not a routing result'
+    return f'{name} exited {code}'
 def sh(cmd, check=True, ok=(0,), **kw):
     print('  $', ' '.join(str(c) for c in cmd))
     name = ' '.join(os.path.basename(str(c)) for c in cmd[:2])
     with timed(name, kind='script'): r = subprocess.run(cmd, **kw)
-    if r.returncode not in ok and check: raise StepFailed(f'{name} exited {r.returncode}')
+    if r.returncode not in ok and check: raise StepFailed(how_it_ended(name, r.returncode))
     return r
 def router_dir():
     rd = os.environ.get('ROUTER_DIR')
@@ -120,7 +129,8 @@ def router(nets, layers, extra=(), clearances=None, add_only=False):
         json.dump(ours, open(held_file(), 'w')); held.save()
         try: rec.update(run_router(cmd, rd), earlier_pieces_locked=len(ours))
         finally: release_held()
-        if rec.pop('returncode') != 0: raise StepFailed('py_router/route.py exited non-zero')
+        code = rec.pop('returncode')
+        if code != 0: raise StepFailed(how_it_ended('py_router/route.py', code))
         if not os.path.exists(out): raise StepFailed('the router exited 0 but wrote no board')
         guard(A, out, set(nets)); os.replace(out, BOARD)
         B = bd.Board(BOARD); done = [n for n in nets if not checks.top_incomplete(B, n)]
@@ -158,13 +168,24 @@ def tree_len(pts):
     while len(inn) < len(pts):
         d, j = min((math.dist(pts[i], pts[j]), j) for i in inn for j in range(len(pts)) if j not in inn); inn.add(j); L += d
     return L
+def classes_beside(board):
+    """{class: [net patterns]} from the .kicad_pro beside the board, or None"""
+    pro = os.path.splitext(board)[0] + '.kicad_pro'
+    if not os.path.exists(pro): return None
+    cl = {}
+    for p in json.load(open(pro)).get('net_settings', {}).get('netclass_patterns') or []: cl.setdefault(p['netclass'], []).append(p['pattern'])
+    return cl
+def leaves_top(B, net): return any(v['net'] == net for v in B.vias) or any(s['net'] == net and s['layer'] != 'F.Cu' for s in B.segs)
 def finish(step, commit, final=False, failed=None):
     saved = [os.path.join(WORK, f'{step}.kicad_pcb'), os.path.join(WORK, f'{step}_checks.json')]
     shutil.copy(BOARD, saved[0])
     with timed('load board', kind='check'): B = bd.Board(BOARD)
     per = {}
-    cl = json.load(open(os.path.join(WORK, 'net_classes.json'))) if os.path.exists(os.path.join(WORK, 'net_classes.json')) else None
+    cl = classes_beside(BOARD) or (json.load(open(os.path.join(WORK, 'net_classes.json'))) if os.path.exists(os.path.join(WORK, 'net_classes.json')) else None)
     with timed('own checks', kind='check') as rec: R = checks.report(B, justify=final or step not in ('setup', '2a'), timing=per, classes=cl); rec['per_check_s'] = per
+    # a joined net over its off-top limit is reported, not a stop: the run goes on, so the placement can be judged on a whole board
+    R['too_long'] = [dict(net=n, length=round(L, 1), tree=round(t, 1)) for n in B.nets if bd.is_signal(n) and leaves_top(B, n) and not checks.top_incomplete(B, n)
+                     for far, L, t in [too_long_to_pass(B, n, cl or {})] if far]
     if krt_checks.configured():
         with timed("router's checker (second opinion)", kind='check'): R.update(krt_checks.report(BOARD))
         # without KiCad's own refill the router estimates a pour's fill, and that estimate misses vias on a zone's edge that KiCad's fill
@@ -400,12 +421,12 @@ def route_signals(nets, step='2e'):
     if left: pad_vias_then_l3(left, f'{step} pass 4')
     drop_dangling(nets, step)                                                 # first, so a stub left over does not change which vias the check flags
     top_again(nets, step)
-    bias_out_of_the_way(nets, step)
+    clear_the_way(nets, step)
     drop_dangling(nets, step)
     cl = net_classes() if os.path.exists(os.path.join(WORK, 'net_classes.json')) else {}
     B = bd.Board(BOARD); still_open = [n for n in nets if checks.top_incomplete(B, n)]; long = {n: w for n in nets if n not in still_open for w in [too_long_to_pass(B, n, cl)] if w[0]}
     for n in still_open: print(f'  {n}: still open')
-    for n, (_, L, t) in long.items(): print(f'  {n}: {L:.0f} mm for a {t:.0f} mm tree, over the limit for a net off the top layer')
+    for n, (_, L, t) in long.items(): print(f'  {n}: {L:.0f} mm for a {t:.0f} mm tree, over the limit for a net off the top layer; check --final reports it')
     count(f'{step} nets left open', len(still_open)); count(f'{step} nets left too long', len(long)); return still_open, sorted(long)
 
 def route_bias(nets):
@@ -415,39 +436,63 @@ def route_bias(nets):
 FRONT_LONG = 1.5; BOX = 2.0; VIA_MM = 3.0; WEIGHT = {'P2_FrontEnd': 3.0}     # per mm of track; a class not listed weighs 1, and a via counts as VIA_MM of its net
 def weight(net, cl): return max([w for c, w in WEIGHT.items() if in_class(net, cl, c)] or [1.0])
 def cost(B, nets, cl): return sum(weight(n, cl) * (length_and_tree(B, n)[0] + VIA_MM * sum(v['net'] == n for v in B.vias)) for n in nets)
-def bias_out_of_the_way(nets, step):
-    """2d lays the bias on L3 before any signal, so a front-end net that joined off the top layer may have gone round it. Such a net
-    over FRONT_LONG x its tree, with bias track on L3 in its box, is joined on L3 again with those bias nets' L3 tracks lifted, and the
-    bias is routed again round it. Kept only if the front-end net is shorter with no more vias, every bias net joins within its length
-    limit, no supply zone is cut, and the class-weighted total is lower; otherwise the board goes back."""
+def rank(net, cl): return checks.priority(net, cl) or (6 if net in bd.BIAS else 99)
+def clear_the_way(nets, step):
+    """The router, not the net classes, decides the order of an L3 call, and 2d lays the bias on L3 before any signal. So a net still
+    open, or a front-end net that joined off the top layer at over FRONT_LONG x its tree, may have been shut out or sent round by a
+    lower-priority net's L3 track. If lower-priority signal or bias nets have L3 track in the box round its pads, those tracks are
+    lifted, the net is joined first (pad vias and L3, then with router vias if it must), and the lifted nets are routed again round it.
+    The bias alone is lifted first, then every lower-priority net in the box: the fewer nets moved, the less else can get worse.
+    Kept only if the net now joins (or, if it was long, is shorter with no more vias and the class-weighted total drops), every lifted
+    net that was joined still is and is not newly over its length limit, nothing new is squeezed or runs beside high-impedance copper,
+    and no supply zone is cut; otherwise the board goes back."""
     cl = net_classes() if os.path.exists(os.path.join(WORK, 'net_classes.json')) else {}
-    for n in [n for n in nets if in_class(n, cl, 'P2_FrontEnd')]:
-        B = bd.Board(BOARD); L, t = length_and_tree(B, n)
-        if checks.top_incomplete(B, n) or L <= FRONT_LONG * t or not any(s['net'] == n and s['layer'] == 'In2.Cu' for s in B.segs): continue
-        xs, ys = zip(*[(p['x'], p['y']) for p in B.pads if p['net'] == n and not checks.is_tp(p)])
-        area = box(min(xs) - BOX, min(ys) - BOX, max(xs) + BOX, max(ys) + BOX)
-        bias = sorted({s['net'] for s in B.segs if s['net'] in bd.BIAS and s['layer'] == 'In2.Cu' and not s['locked'] and B.seg_geom(s).intersects(area)})
-        if not bias: continue
-        vias = lambda B, m: sum(v['net'] == m for v in B.vias)
-        was = dict(L=L, vias=vias(B, n), cost=cost(B, [n] + bias, cl), zones=len(checks.zone_integrity(B)), bias={b: wanders(B, b)[1] for b in bias},
-                   open={b for b in bias if checks.top_incomplete(B, b)})
-        shutil.copy(BOARD, BOARD + '.bias')
-        B.remove([s['uuid'] for s in B.segs if s['layer'] == 'In2.Cu' and s['net'] in [n] + bias]); B.save(BOARD)
+    vias = lambda B, m: sum(v['net'] == m for v in B.vias)
+    def attempt(n, lift, shut, long):
+        B = bd.Board(BOARD); L = length_and_tree(B, n)[0]
+        was = dict(L=L, vias=vias(B, n), cost=cost(B, [n] + lift, cl), zones=len(checks.zone_integrity(B)),
+                   open={m for m in lift if checks.top_incomplete(B, m)}, L_of={m: length_and_tree(B, m)[0] for m in lift})
+        shutil.copy(BOARD, BOARD + '.clear'); start = copper_ids(B)
+        B.remove([s['uuid'] for s in B.segs if s['layer'] == 'In2.Cu' and s['net'] in [n] + lift]); B.save(BOARD)
+        sig = [m for m in lift if m not in bd.BIAS]; bias = [m for m in lift if m in bd.BIAS]
         try:
-            router([n], ['In2.Cu'], TOP_ONLY, add_only=True); route_bias(bias); drop_dangling(bias, step)
+            if shut:
+                pad_vias_then_l3([n], f'{step} way cleared')
+                if checks.top_incomplete(bd.Board(BOARD), n): wide_then_standard([n], step)
+            else: router([n], ['In2.Cu'], TOP_ONLY, add_only=True)
+            if sig:
+                router(sig, ['In2.Cu'], TOP_ONLY, add_only=True)
+                again = [m for m in sig if m not in was['open'] and checks.top_incomplete(bd.Board(BOARD), m)]
+                if again: wide_then_standard(again, step)
+            if bias: route_bias(bias)
+            drop_dangling([n] + lift, step)
             B = bd.Board(BOARD); now = length_and_tree(B, n)[0]
             why = next((w for bad, w in (
-                (checks.top_incomplete(B, n), 'not joined'), (now >= was['L'] or vias(B, n) > was['vias'], f'{now:.0f} mm, {vias(B, n)} vias'),
-                (any(checks.top_incomplete(B, b) for b in bias if b not in was['open']), 'a bias net left open'),
-                (any(wanders(B, b)[0] and wanders(B, b)[1] > was['bias'][b] for b in bias), 'a bias net over its length limit'),
+                (checks.top_incomplete(B, n), 'not joined'),
+                (long and (now >= was['L'] or vias(B, n) > was['vias']), f'{now:.0f} mm, {vias(B, n)} vias'),
+                (any(checks.top_incomplete(B, m) for m in lift if m not in was['open']), 'a lifted net left open'),
+                (any(too_long_to_pass(B, m, cl)[0] and length_and_tree(B, m)[0] > was['L_of'][m] for m in lift), 'a lifted net over its length limit'),
+                (any(len(squeezed(B, m, start)) >= 2 or hz_run(B, m, start) > HZ_RUN for m in [n] + sig), 'squeezed or beside high-impedance copper'),
                 (len(checks.zone_integrity(B)) > was['zones'], 'a supply zone cut'),
-                (cost(B, [n] + bias, cl) >= was['cost'], 'no lower weighted total')) if bad), None)
+                (long and cost(B, [n] + lift, cl) >= was['cost'], 'no lower weighted total')) if bad), None)
         except StepFailed as e: why = f'the retry failed ({e})'
-        if why: shutil.copy(BOARD + '.bias', BOARD)
-        count(f'{step} front-end nets routed again round the bias'); count(f'{step} front-end reroutes round the bias kept', int(not why))
-        print(f"  {n} ({was['L']:.0f} mm for a {t:.0f} mm tree) routed on L3 before {bias}: " + (f'not kept ({why})' if why else
-              f"kept, {now:.0f} mm and {vias(B, n)} vias; weighted total {was['cost']:.0f} -> {cost(B, [n] + bias, cl):.0f}"))
-    if os.path.exists(BOARD + '.bias'): os.remove(BOARD + '.bias')
+        if why: shutil.copy(BOARD + '.clear', BOARD)
+        count(f'{step} nets routed again with lower-priority L3 lifted'); count(f'{step} of those kept', int(not why))
+        print(f"  {n} ({'open' if shut else f'{L:.0f} mm'}) routed on L3 before {lift}: " + (f'not kept ({why})' if why else
+              f"kept, {now:.0f} mm and {vias(B, n)} vias" + (f"; weighted total {was['cost']:.0f} -> {cost(B, [n] + lift, cl):.0f}" if long else '')))
+        return not why
+    for n in nets:
+        B = bd.Board(BOARD); L, t = length_and_tree(B, n); shut = checks.top_incomplete(B, n)
+        long = not shut and in_class(n, cl, 'P2_FrontEnd') and L > FRONT_LONG * t and any(s['net'] == n and s['layer'] == 'In2.Cu' for s in B.segs)
+        if not (shut or long): continue
+        xs, ys = zip(*[(p['x'], p['y']) for p in B.pads if p['net'] == n and not checks.is_tp(p)])
+        area = box(min(xs) - BOX, min(ys) - BOX, max(xs) + BOX, max(ys) + BOX)
+        lower = sorted({s['net'] for s in B.segs if s['layer'] == 'In2.Cu' and not s['locked'] and s['net'] != n and (bd.is_signal(s['net']) or s['net'] in bd.BIAS)
+                        and rank(s['net'], cl) > rank(n, cl) and B.seg_geom(s).intersects(area)})
+        bias = [m for m in lower if m in bd.BIAS]
+        for lift in [x for x in (bias, lower) if x][:2 if bias != lower else 1]:
+            if attempt(n, lift, shut, long): break
+    if os.path.exists(BOARD + '.clear'): os.remove(BOARD + '.clear')
 def link_unpoured_ground():
     """A ground pad set to no zone connection (a corner with no room for spokes) is not joined by the pours, and nothing routes ground:
     it gets a top-layer link to the nearest ground pad that can take one"""
@@ -471,12 +516,9 @@ def run_step(s, src):
     if s == 'setup':
         if not src: raise SystemExit('--from BOARD needed')
         sh([PY, os.path.join(HERE, 'setup6.py'), src, BOARD]); link_unpoured_ground()
-        pro = os.path.splitext(src)[0] + '.kicad_pro'; cl = {}
-        if not os.path.exists(pro): print('  no .kicad_pro beside the board, so step 2p has no net classes')
-        else:
-            ns = json.load(open(pro)).get('net_settings', {})
-            for p in ns.get('netclass_patterns') or []: cl.setdefault(p['netclass'], []).append(p['pattern'])
-            json.dump(cl, open(os.path.join(WORK, 'net_classes.json'), 'w'), indent=1)
+        cl = classes_beside(src)
+        if cl is None: print('  no .kicad_pro beside the board, so step 2p has no net classes')
+        else: json.dump(cl, open(os.path.join(WORK, 'net_classes.json'), 'w'), indent=1)
         B = bd.Board(BOARD)                                                    # a warning, not a failure: the placement is the author's to fix, and routing can still run
         for r, v in hand_access.check(B, hand_access.hand_refs(B)).items():
             if not v['ok']: print(f"  WARNING: {r} is swapped by hand but hard to reach: nearest other pad {v['nearest_mm']} mm (needs {hand_access.SPACE_MM}), no clear board edge within {hand_access.EDGE_MM} mm"); count('hand-swap parts hard to reach')
@@ -507,25 +549,30 @@ def run_step(s, src):
         drop_dangling([n for n in B.nets if bd.is_supply(n) and n not in bd.RAILS], '2d')
     elif s == '2e':
         B = bd.Board(BOARD); later = mirror_route.waits_for_copy(B); still_open, long = route_signals([n for n in open_signals(B) if n not in later])
-        # every one of these nets has now been attempted, so one left open or wandering is this step's failure, not something for the final check to find
-        if still_open or long: raise StepFailed(f'2e left {len(still_open)} net(s) open {still_open} and {len(long)} too long {long}')
+        # every one of these nets has now been attempted, so one left open is this step's failure, not something for the final check to find
+        if still_open: raise StepFailed(f'2e left {len(still_open)} net(s) open {still_open}')
     elif s == '2h': sh([PY, os.path.join(HERE, 'mirror_route.py'), BOARD, BOARD, '--json', os.path.join(WORK, '2h_mirror.json')])
     elif s == '2i':
         sh(links); route_hz(open_hz(bd.Board(BOARD))); _, long = route_signals(open_signals(bd.Board(BOARD)), step='2i')
         # 2i is the last routing step for everything but the test points, which 2f joins
         B = bd.Board(BOARD); still_open = [n for n in B.nets if checks.top_incomplete(B, n)]
-        if still_open or long: raise StepFailed(f'2i left {len(still_open)} net(s) open {still_open} and {len(long)} too long {long}')
+        if still_open: raise StepFailed(f'2i left {len(still_open)} net(s) open {still_open}')
     elif s == '2f':
         # a test point with no room for a via is not a failure here: the router reaches it by a track instead
         sh([PY, os.path.join(HERE, 'drops.py'), BOARD, BOARD, '--testpoints', '--json', os.path.join(WORK, '2f_drops.json')], ok=(0, drops.NO_ROOM))
         router(checks.loose_testpoint_nets(bd.Board(BOARD)), ['F.Cu', 'In2.Cu'], TOP_AND_L3, add_only=True)
+        drop_dangling([n for n in bd.Board(BOARD).nets if n not in bd.RAILS | bd.GROUND], '2f')    # the last routing step: nothing loose may be left
     elif s != 'check': raise SystemExit('unknown step ' + s)
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument('step'); ap.add_argument('--from', dest='src'); ap.add_argument('--commit', action='store_true')
-    ap.add_argument('--final', action='store_true'); a = ap.parse_args()
+    ap.add_argument('--final', action='store_true'); ap.add_argument('--board', help='with check: check this board, not work/board.kicad_pcb')
+    a = ap.parse_args(); global BOARD
+    if a.board:
+        if a.step != 'check': raise SystemExit('--board is for the check step only')
+        BOARD = os.path.abspath(a.board)
     os.makedirs(WORK, exist_ok=True); failed = None; release_held()
-    before = BOARD + '.before'; had_board = os.path.exists(BOARD)
+    before = BOARD + '.before'; had_board = os.path.exists(BOARD) and a.step != 'check'             # check changes nothing, so it keeps no copy
     if had_board: shutil.copy(BOARD, before)
     t0 = time.perf_counter()
     try: run_step(a.step, a.src)
@@ -537,7 +584,7 @@ def main():
     code = finish(a.step, a.commit and not failed, a.final, failed) or int(bool(failed))
     write_timing(a.step, time.perf_counter() - t0)
     if had_board:
-        if code and a.step != 'check':
+        if code:
             os.replace(before, BOARD); print(f'[{a.step}] the board is back to what it was before this step; the result that failed is work/{a.step}.kicad_pcb')
         else: os.remove(before)
     sys.exit(code)

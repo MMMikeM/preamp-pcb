@@ -139,14 +139,15 @@ def dangling_vias(B, nets=None):
     return [v for v in B.vias if (nets is None or v['net'] in nets) and len(via_layers(B, v)) < 2]
 
 def dangling_tracks(B, nets=None):
-    """Tracks with an end that meets no copper of their net on their layer, and without which the net's pads stay joined as they are
-    (KiCad DRC: track has an unconnected end)"""
+    """Tracks with an end point that lies in no other copper of their net on their layer, and without which the net's pads stay joined
+    as they are (KiCad DRC: track has an unconnected end). The end point, not the round end of the track: KiCad joins a track end
+    only where the point itself is inside other copper, so a stub lying alongside a track is still loose."""
     out = []
     for s in B.segs:
         if nets is not None and s['net'] not in nets: continue
         mine = [g for n, g, k, o in B.copper(s['layer']) if n == s['net'] and o is not s]
         mine += [Polygon(z['pts']) for z in B.zones if z['net'] == s['net'] and s['layer'] in z['layers'] and len(z['pts']) > 2]
-        loose = any(not any(Point(x, y).buffer(s['w'] / 2, 8).intersects(g) for g in mine) for x, y in ((s['x1'], s['y1']), (s['x2'], s['y2'])))
+        loose = any(not any(g.distance(Point(x, y)) < 1e-3 for g in mine) for x, y in ((s['x1'], s['y1']), (s['x2'], s['y2'])))
         if loose and len(pad_groups(B, s['net'], {s['uuid']})) == len(pad_groups(B, s['net'])): out.append(s)
     return out
 
@@ -211,7 +212,7 @@ def report(B, justify=True, timing=None, classes=None):
                       length={l: round(sum(math.dist((s['x1'], s['y1']), (s['x2'], s['y2'])) for s in B.segs if s['layer'] == l), 1) for l in B.copper_layers})
     return R
 FAIL = ('clearance', 'holes', 'edge', 'hz', 'no_via_pads', 'zone_integrity', 'krt_drc')   # must be empty at every stage; krt_drc is stage_route's second opinion
-FINAL = ('unconnected', 'unjustified_vias', 'dangling_vias', 'dangling_tracks')   # must be empty at the end; symmetry is always informational (some differences are deliberate)
+FINAL = ('unconnected', 'unjustified_vias', 'dangling_vias', 'dangling_tracks', 'too_long')   # too_long is stage_route's; must be empty at the end; symmetry is always informational (some differences are deliberate)
 def must_fix(R, final=False): return {k: len(R[k]) for k in FAIL + (FINAL if final else ()) if R.get(k)}
 
 if __name__ == '__main__':

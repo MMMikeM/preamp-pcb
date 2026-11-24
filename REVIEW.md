@@ -1,3 +1,55 @@
+# route6: reviewer feedback (24 Nov 2026)
+
+Reply to `FEEDBACK_23NOV_LATE.md` and the 7bccb83 note. KiCadRoutingTools v0.24.1, `BIAS_L3_COST=1.0`, supply on.
+
+## `landscape-aligned` routes here, at your commit
+Setup to 2f at `bf12262`'s code: every step passes, neck 480 mm / 17 vias, bridge 454 / 16, `check --final` passes (one
+P5 warning), and 2f leaves no `PB` stub. `/Neck/SA` joins at 31.8 mm / 3 vias. The router is deterministic here: 2e
+under `PYTHONHASHSEED` 0 and 1 gives the same board. So your failing run differs by platform, or by the router dying
+mid-run (point 2). **Please push the `work/2e.kicad_pcb` and log of a run where SA is left open**, so I can check the
+fix below on the real case.
+
+`landscape-7bccb83` reproduces your numbers exactly: neck 453 / 14, bridge 444 / 17.
+
+## 1. Lower-priority L3 out of the way (generalises the bias retry)
+At the end of 2e and 2i, for a net still open, or a P2 net joined off the top layer at over 1.5 x its tree: if signal
+nets of a lower class, or bias nets, have L3 track in the box round its pads, those tracks are lifted, the net is joined
+first (pad vias and L3, then with router vias if it must), and the lifted nets are routed again round it. The bias alone
+is tried first, then every lower-priority net in the box. Kept only if the net now joins (or, if it was long, is
+shorter with no more vias and the class-weighted total drops), every lifted net that was joined still is and is not
+newly over its length limit, nothing new is squeezed or runs beside high-impedance copper, and no supply zone is cut.
+One batch L3 call stays as before; this runs only after it.
+
+| Board | Before | Now | `check --final` |
+|---|---|---|---|
+| 7bccb83 | neck 453 / 14, bridge 444 / 17 | identical | passes |
+| aligned | neck 480 / 17, bridge 454 / 16 | identical | passes, 1 P5 warning |
+| 83962f0 | neck 408 / 17, bridge 401 / 16 | identical | passes |
+| 509fb5a | neck 409 / 15, bridge 415 / 11 | identical | passes |
+
+Lifting every lower net at once first cost `/Neck/SA` 10 mm on 7bccb83 (a lifted net came back over its limit, so the old
+bias-only result was lost); hence bias first. A stand-in-router test covers the open case: a P2 net shut out by a P5 L3
+track joins first and the P5 track is routed again.
+
+## 2. Router death
+A script or router that ends by a signal is reported as such: "killed by SIGKILL, probably out of memory: not a routing
+result". On Windows, the NTSTATUS codes for out of memory, access violation and stack overflow are named the same way.
+
+## 3. Dangling stubs
+Our track-end test used the track's round end, so a stub lying alongside a track counted as joined; KiCad uses the end
+point. It now does too, and 2f clears loose copper on every net but the rails and ground (it had no clean-up before).
+I could not reproduce your `PB` stub, as 2f leaves none here; none of our routed boards has a loose end by the new test.
+
+## 4. "Too long" no longer stops the run
+2e and 2i stop only for a net left open. A net over its off-top limit is listed as `too_long` in every step's checks and
+fails `check --final`.
+
+## 5. `check --board PATH`
+`stage_route.py check --final --board PATH` checks that board, taking the net classes from the `.kicad_pro` beside it if
+there is one; it writes nothing beside the board.
+
+---
+
 # route6: reviewer feedback (23 Nov 2026)
 
 Reply to `FEEDBACK_23NOV.md`. KiCadRoutingTools v0.24.1, `BIAS_L3_COST=1.0`, supply on, 2d to 2i from each board's 2c.

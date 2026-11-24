@@ -427,15 +427,15 @@ def _front_end_round_bias(bare, work, monkeypatch, long=True, bias_back=6.0):
 def l3(B, n): return sum(math.dist((s['x1'], s['y1']), (s['x2'], s['y2'])) for s in B.segs if s['net'] == n and s['layer'] == 'In2.Cu')
 def test_a_long_front_end_net_is_routed_again_with_the_bias_moved_out_of_its_way(bare, work, monkeypatch):
     n, calls = _front_end_round_bias(bare, work, monkeypatch); before = l3(bd.Board(stage_route.BOARD), n)
-    stage_route.bias_out_of_the_way([n], 'test'); B = bd.Board(stage_route.BOARD)
+    stage_route.clear_the_way([n], 'test'); B = bd.Board(stage_route.BOARD)
     assert calls == [[n], ['PB']] and l3(B, n) < before - 20 and l3(B, 'PB') == pytest.approx(6.0) and not checks.top_incomplete(B, n)
 def test_a_reroute_that_costs_the_bias_more_than_the_front_end_gains_is_not_kept(bare, work, monkeypatch):
     n, calls = _front_end_round_bias(bare, work, monkeypatch, bias_back=100.0); was = open(stage_route.BOARD).read()
-    stage_route.bias_out_of_the_way([n], 'test')
+    stage_route.clear_the_way([n], 'test')
     assert calls == [[n], ['PB']] and open(stage_route.BOARD).read() == was                      # within PB's own limit, but a P2 mm weighs 3 bias mm: 24 mm saved does not pay for 94
 def test_a_front_end_net_within_its_length_is_left_alone(bare, work, monkeypatch):
     n, calls = _front_end_round_bias(bare, work, monkeypatch, long=False); was = open(stage_route.BOARD).read()
-    stage_route.bias_out_of_the_way([n], 'test')
+    stage_route.clear_the_way([n], 'test')
     assert calls == [] and open(stage_route.BOARD).read() == was
 def test_a_rail_pad_beyond_the_other_rails_zone_joins_its_own_through_one_l3_hop(bare, work):
     P = drops.Placer(bare); ok = [p for p in bare.pads if p['net'] == 'V+' and drops.smd_top(p) and not bare.fps[p['ref']]['hand'] and P.spot(p)]
@@ -475,3 +475,34 @@ def test_a_flagged_pair_on_a_shared_inner_track_moves_to_top_and_the_third_pad_s
     stage_route.top_again([n], 'test'); B = bd.Board(stage_route.BOARD)
     inner = [s for s in B.segs if s['net'] == n and s['layer'] == 'In2.Cu']
     assert not checks.top_incomplete(B, n) and len(inner) == 1 and len([v for v in B.vias if v['net'] == n]) == 2
+def test_a_net_shut_out_by_a_lower_priority_l3_track_is_joined_first_and_that_track_routed_again(bare, work, monkeypatch):
+    monkeypatch.setenv('ROUTER_DIR', str(work)); n, m = close_pairs(bare)[:2]; a, b = ends(bare, n)
+    (work / 'net_classes.json').write_text(json.dumps({'P2_FrontEnd': [n], 'P5_AudioOut': [m]}))
+    mx, my = (a['x'] + b['x']) / 2, (a['y'] + b['y']) / 2; track(bare, m, [(mx, my - 3), (mx, my + 3)], layer='In2.Cu')   # m's L3 track across n's way
+    bare.save(stage_route.BOARD); calls = []
+    def run(cmd, cwd):                                                                  # n joins on L3 between its pad vias only while m's track is gone
+        C = bd.Board(stage_route.BOARD); nets = cmd[cmd.index('--nets') + 1:cmd.index('--layers')]; calls.append(nets)
+        if n in nets and not any(s['net'] == m and s['layer'] == 'In2.Cu' for s in C.segs): track(C, n, [(v['x'], v['y']) for v in C.vias if v['net'] == n][:2], layer='In2.Cu')
+        if m in nets: track(C, m, [(mx + 20, my), (mx + 20, my + 6)], layer='In2.Cu')
+        C.save(stage_route.BOARD + '.tmp'); return dict(returncode=0)
+    monkeypatch.setattr(stage_route, 'run_router', run); monkeypatch.setattr(checks, 'dangling_tracks', lambda B, nets=None: [])
+    stage_route.clear_the_way([n], 'test'); B = bd.Board(stage_route.BOARD)
+    assert calls[0] == [n] and [m] in calls and not checks.top_incomplete(B, n) and l3(B, m) == pytest.approx(6.0)
+def test_a_net_too_long_off_the_top_layer_fails_only_the_final_check(bare, work, monkeypatch):
+    monkeypatch.delenv('ROUTER_DIR', raising=False); n = close_pairs(bare)[0]; a, b = ends(bare, n)
+    bare.add([bare.via_text(p['x'], p['y'], 0.45, 0.2, n) for p in (a, b)]); track(bare, n, [(a['x'], a['y']), (a['x'], a['y'] + 20), (b['x'], b['y'])], layer='In2.Cu')
+    bare.save(stage_route.BOARD); stage_route.finish('check', False, final=False)
+    R = json.load(open(work / 'check_checks.json')); assert [x['net'] for x in R['too_long']] == [n]
+    assert 'too_long' in checks.must_fix(R, final=True) and 'too_long' not in checks.must_fix(R)
+def test_a_router_killed_from_outside_is_not_reported_as_a_routing_result():
+    assert 'probably out of memory' in stage_route.how_it_ended('route.py', -9) and 'out of memory' in stage_route.how_it_ended('route.py', 0xC0000017)
+    assert stage_route.how_it_ended('route.py', 1) == 'route.py exited 1'
+def test_a_stub_lying_alongside_a_track_is_still_loose(bare):
+    n = close_pairs(bare)[0]; straight(bare, n); a, b = ends(bare, n); d = math.dist((a['x'], a['y']), (b['x'], b['y']))
+    nx, ny = -(b['y'] - a['y']) / d, (b['x'] - a['x']) / d; mx, my = (a['x'] + b['x']) / 2 + 0.15 * nx, (a['y'] + b['y']) / 2 + 0.15 * ny
+    track(bare, n, [(mx, my), (mx + 0.6 * nx, my + 0.6 * ny)])                          # its round end overlaps the track, its end point does not
+    assert [s['net'] for s in checks.dangling_tracks(bare)] == [n]
+def test_check_takes_a_board_by_path_and_leaves_it_alone(bare, tmp_path):
+    src = tmp_path / 'mine.kicad_pcb'; bare.save(str(src)); was = src.read_text(); env = dict(os.environ, R6_WORK=str(tmp_path / 'w')); env.pop('ROUTER_DIR', None)
+    r = subprocess.run([sys.executable, os.path.join(os.path.dirname(HERE), 'stage_route.py'), 'check', '--board', str(src)], env=env, capture_output=True, text=True)
+    assert r.returncode == 0 and '[check] tracks 0' in r.stdout and src.read_text() == was and sorted(os.listdir(tmp_path)) == ['mine.kicad_pcb', 'w']

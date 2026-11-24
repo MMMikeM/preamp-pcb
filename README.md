@@ -6,7 +6,8 @@ Step-by-step 6-layer routing helpers for the humbucker preamp board. Start with 
     python via_justify.py tests/board_4layer_rev1.kicad_pcb
     python stage_route.py setup --from ../../../humbucker-preamp.kicad_pcb
     python stage_route.py 2b                  # then 2c; steps 2a, 2p, 2d, 2e, 2i, 2f also need ROUTER_DIR
-    python stage_route.py check --final       # also fails on unconnected nets, unjustified vias (P1-P3) and copper that joins nothing
+    python stage_route.py check --final       # also fails on unconnected nets, unjustified vias (P1-P3), copper that joins nothing
+                                              # and nets too long off the top layer; --board PATH checks that board instead
 
 Everything is written to `work/`. The project board is only read.
 
@@ -32,16 +33,19 @@ failed stays in `work/<step>.kicad_pcb` to look at. A board with arc tracks is r
 - `2a`, `2p`, `2b` and `2e` leave alone only the nets `2h` will copy, and route everything else on both channels. `2h` then
   copies those nets, skipping any whose copy would collide with copper that is staying, and `2i` routes whatever the copy
   did not cover. When no net has a twin (channels laid out by hand), `2h` copies nothing and passes.
-- `2e` and `2i` fail on a net left open or one off the top layer longer than max(1.8 x its tree, tree + 12 mm); P4 and P5
-  nets, being low-impedance, get 2.2 x. Both remove the vias and tracks that end up joining nothing (a pad via whose L3
+- `2e` and `2i` fail on a net left open. A net off the top layer longer than max(1.8 x its tree, tree + 12 mm) (P4 and P5
+  nets, being low-impedance, get 2.2 x) does not stop the run: `check --final` reports it, so the placement can be judged
+  on a whole board. Both remove the vias and tracks that end up joining nothing (a pad via whose L3
   join was made another way, a track stub with a free end); `2d` does the same for the battery and bias vias. A V+ or V-
   via its zone misses is left for `check --final` to report. A pair the via check flags is routed again on top, with only
-  the inner-layer track between the two pieces lifted. A front-end net joined off the top layer at over 1.5 x its tree,
-  with bias track on L3 in its way, is joined again with that bias lifted and the bias routed again round it; kept only if
-  the class-weighted total drops and nothing else gets worse.
+  the inner-layer track between the two pieces lifted. A net still open, or a front-end net joined off the top layer at
+  over 1.5 x its tree, with L3 track of a lower-priority signal or bias net in its way, is joined again with those tracks
+  lifted and they are routed again round it; kept only if it now joins (or, if long, the class-weighted total drops) and
+  nothing else gets worse.
 - With the net classes from setup, an unjustified via is must-fix on P1-P3, a warning on P4-P6 and not reported on any
   other net (power, battery and ground are low-impedance, so a via costs nothing there).
-- `2f` puts a via in each loose test point where one fits and has the router reach the rest by a track.
+- `2f` puts a via in each loose test point where one fits and has the router reach the rest by a track, then clears
+  anything left joining nothing on every net but the rails and ground.
 
 ## The router (KiCadRoutingTools)
 Set `ROUTER_DIR` to a checkout of https://github.com/drandyhaas/KiCadRoutingTools (MIT). It does two jobs here:
