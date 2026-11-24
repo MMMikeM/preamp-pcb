@@ -76,7 +76,7 @@ back over its limit? 2e log, 2f board and checks are in `run-0616589/`.
    rule. Electrically neither cares: both are kilohm-or-lower nodes, and SA's and PB's extra length is only capacitance to
    ground. A tie on the score is a real tie; break it by fewer vias, then fewer mm.
 2. **`Net-(Q103-C)` is not an aggressor.** Simulated (ngspice, AC, 1 V pickup signal): it is U3B's inverting input, a
-   virtual earth, swinging 0.4-2.7 % of the outputs (27 mV at 100 Hz, 7 mV at 1 kHz, against OA/OB 1.5-1.8 V). DA/DB
+   virtual earth, swinging 0.4-1.8 % of the outputs (27 mV at 100 Hz, 7 mV at 1 kHz, against OA/OB 1.5-1.8 V). DA/DB
    are the same (0.3-2 %), PB under 2 %. Keep aggressors to P5.
 3. **Stackup confirmed:** JLC default 1.6 mm 6-layer, as setup6.
 4. **`Net-(U3C--)`:** the pattern `Net-(U3B--)` in the `.kicad_pro` is stale (that net no longer exists; U3C-- is the neck
