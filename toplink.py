@@ -9,6 +9,7 @@ import board as bd
 
 GRID = 0.05
 DIRS = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)]
+TURNS = [[min((nd - d) % 8, (d - nd) % 8) for nd in range(8)] for d in range(8)]
 TURN = 0.15            # mm-equivalent per 45 degrees of turn: keeps paths from stair-stepping
 HZ_KEEP = 1.0          # soft keep-away from high-impedance copper for other nets
 HZ_COST = 1.5          # extra cost per mm travelled inside that keep-away
@@ -57,10 +58,13 @@ def top_path(B, net, A, Bc, width, margin=3.0, layer='F.Cu', max_len=None):
     X, Y = np.meshgrid(xs, ys, indexing='ij')
     win = shapely.box(x0 - 2, y0 - 2, x1 + 2, y1 + 2)
     blocked = np.zeros((nx, ny), bool); soft = np.zeros((nx, ny), bool)
+    def mark(grid, g):                                                    # only the grid under the shape's bounds can be inside it
+        bx0, by0, bx1, by1 = g.bounds; a, b = np.searchsorted(xs, bx0), np.searchsorted(xs, bx1, 'right'); c, d = np.searchsorted(ys, by0), np.searchsorted(ys, by1, 'right')
+        if a < b and c < d: grid[a:b, c:d] |= shapely.contains_xy(g, X[a:b, c:d], Y[a:b, c:d])
     for n, geom, kind, o in B.copper(layer):
         if n == net or not geom.intersects(win): continue
-        blocked |= shapely.contains_xy(geom.buffer(bd.clearance(net, n) + width / 2, 8), X, Y)
-        if bd.is_hz(n) and not bd.is_hz(net): soft |= shapely.contains_xy(geom.buffer(HZ_KEEP, 8), X, Y)
+        mark(blocked, geom.buffer(bd.clearance(net, n) + width / 2, 8))
+        if bd.is_hz(n) and not bd.is_hz(net): mark(soft, geom.buffer(HZ_KEEP, 8))
     own = shapely.contains_xy(A['geom'], X, Y) | shapely.contains_xy(Bc['geom'], X, Y)
     # A track centred at least width/2 inside our own copper adds no copper, so it is legal wherever it runs.
     # Nearer the rim it sticks out and must keep clearance like any other track. The tolerance keeps the centre line
@@ -81,6 +85,7 @@ def top_path(B, net, A, Bc, width, margin=3.0, layer='F.Cu', max_len=None):
         if on_grid and not blocked[si, sj]: src.append((si, sj))   # the track's end cap sits on the anchor, so the anchor must be legal too
     if not src: return None
     keep_away = soft & ~own; INF = 1e18; cap = max_len if max_len is not None else INF; unreachable = []
+    blk, away, goal = blocked.tolist(), keep_away.tolist(), tgt.tolist()     # the search reads cells one at a time, far faster from lists
     def search(penalised):
         dist = {}; prev = {}; pq = []
         for s in src:
@@ -90,15 +95,15 @@ def top_path(B, net, A, Bc, width, margin=3.0, layer='F.Cu', max_len=None):
             c, i, j, d = heapq.heappop(pq)
             if c > dist.get((i, j, d), INF) + 1e-12: continue
             if c > cap + 2.0: break
-            if tgt[i, j]: end = (i, j, d); break
+            if goal[i][j]: end = (i, j, d); break
             for nd in range(8):
-                turn = min((nd - d) % 8, (d - nd) % 8)
+                turn = TURNS[d][nd]
                 if turn > 2 and c > 0: continue                      # no hairpins / acute corners
                 di, dj = DIRS[nd]; a, b = i + di, j + dj
-                if not (0 <= a < nx and 0 <= b < ny) or blocked[a, b]: continue
-                if di and dj and (blocked[i + di, j] or blocked[i, j + dj]): continue
+                if not (0 <= a < nx and 0 <= b < ny) or blk[a][b]: continue
+                if di and dj and (blk[i + di][j] or blk[i][j + dj]): continue
                 step = GRID * (1.41421356 if di and dj else 1.0)
-                nc = c + step + (TURN * turn if c > 0 else 0) + (HZ_COST * step if penalised and keep_away[a, b] else 0)
+                nc = c + step + (TURN * turn if c > 0 else 0) + (HZ_COST * step if penalised and away[a][b] else 0)
                 if nc < dist.get((a, b, nd), INF) - 1e-12:
                     dist[(a, b, nd)] = nc; prev[(a, b, nd)] = (i, j, d); heapq.heappush(pq, (nc, a, b, nd))
         else: unreachable.append(penalised)                       # the queue ran dry before the cut-off: no path at any cost

@@ -3,7 +3,7 @@ usage: checks.py BOARD [--json OUT] [--final] [--no-justify] [--classes work/net
 Checks: unconnected nets, copper clearance (per layer, plus vias and holes through every layer), copper to board edge,
 high-impedance nets top-only with no vias, no vias in the hand-swap resistor pads, placement symmetry (mirror or copy),
 unjustified vias (via_justify.py). KiCad's own DRC stays the final authority; this is the fast inner loop."""
-import sys, json, math, re, argparse, itertools, fnmatch
+import sys, os, json, math, re, argparse, itertools, fnmatch
 from shapely.strtree import STRtree
 from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
@@ -126,12 +126,13 @@ def via_layers(B, v):
     return out | {l for z in B.zones if z['net'] == v['net'] and len(z['pts']) > 2 and Polygon(z['pts']).intersects(g) for l in z['layers']}
 
 def ends_in(B, v):
-    """The ends of its net's tracks that lie inside the via and outside its pads, as {(layer, x, y): width}: without the via, two of
-    them at different points would not meet. Tracks wholly inside the via lead nowhere and are left out."""
-    inside = lambda x, y: math.dist((v['x'], v['y']), (x, y)) < v['size'] / 2
+    """The ends of its net's tracks whose round end reaches the via and that lie outside its pads, as {(layer, x, y): width}: without
+    the via, two of them at different points would not meet. The round end counts, as in the router's DRC, which otherwise reports
+    the two ends left overlapping as a segment-endpoint-gap. Tracks wholly inside the via lead nowhere and are left out."""
+    inside = lambda x, y, r=0: math.dist((v['x'], v['y']), (x, y)) < v['size'] / 2 + r
     pads = [(p['layers'], B.pad_geom(p)) for p in B.pads if p['net'] == v['net'] and math.dist((v['x'], v['y']), (p['x'], p['y'])) < max(p['w'], p['h']) + v['size']]
     return {(s['layer'], round(x, 4), round(y, 4)): s['w'] for s in B.segs if s['net'] == v['net'] and not (inside(s['x1'], s['y1']) and inside(s['x2'], s['y2']))
-            for x, y in ((s['x1'], s['y1']), (s['x2'], s['y2'])) if inside(x, y) and not any(s['layer'] in L and g.contains(Point(x, y)) for L, g in pads)}
+            for x, y in ((s['x1'], s['y1']), (s['x2'], s['y2'])) if inside(x, y, s['w'] / 2) and not any(s['layer'] in L and g.contains(Point(x, y)) for L, g in pads)}
 
 def dangling_vias(B, nets=None):
     """Vias that meet their net's copper on fewer than two layers, whatever touches them on that one (KiCad DRC: via is connected
@@ -151,6 +152,23 @@ def dangling_tracks(B, nets=None):
         if loose and len(pad_groups(B, s['net'], {s['uuid']})) == len(pad_groups(B, s['net'])): out.append(s)
     return out
 
+def classes_beside(board):
+    """{class: [net patterns]} from the .kicad_pro beside the board, or None"""
+    pro = os.path.splitext(board)[0] + '.kicad_pro'
+    if not os.path.exists(pro): return None
+    cl = {}
+    for p in json.load(open(pro)).get('net_settings', {}).get('netclass_patterns') or []: cl.setdefault(p['netclass'], []).append(p['pattern'])
+    return cl
+def tree_len(pts):
+    if len(pts) < 2: return 0.0
+    inn = {0}; L = 0.0
+    while len(inn) < len(pts):
+        d, j = min((math.dist(pts[i], pts[j]), j) for i in inn for j in range(len(pts)) if j not in inn); inn.add(j); L += d
+    return L
+def length_and_tree(B, net):
+    """(track length, shortest tree through the pads) of a net, test points aside"""
+    return (sum(math.dist((x['x1'], x['y1']), (x['x2'], x['y2'])) for x in B.segs if x['net'] == net),
+            tree_len([(p['x'], p['y']) for p in B.pads if p['net'] == net and not is_tp(p)]))
 def priority(net, classes):
     """The number of the highest-priority class the net is in (P1_Gate -> 1), or None"""
     return min((int(m.group(1)) for c, pats in (classes or {}).items() for m in [re.match(r'P(\d+)_', c)]

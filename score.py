@@ -37,24 +37,13 @@ CONSTANTS = dict(WEIGHT=WEIGHT, NODE_WEIGHT=NODE_WEIGHT, UNCLASSED=UNCLASSED, VI
 def classes_for(board, given=None):
     if isinstance(given, dict): return given
     if given: return json.load(open(given))
-    pro = os.path.splitext(board)[0] + '.kicad_pro'
-    if not os.path.exists(pro): return {}
-    cl = {}
-    for p in json.load(open(pro)).get('net_settings', {}).get('netclass_patterns') or []: cl.setdefault(p['netclass'], []).append(p['pattern'])
-    return cl
+    return checks.classes_beside(board) or {}
 
 def value(s):
     m = re.fullmatch(r'([0-9.]+)\s*([pnumkKM]?)', s.strip().replace('µ', 'u'))
     return float(m.group(1)) * {'p': 1e-12, 'n': 1e-9, 'u': 1e-6, 'm': 1e-3, 'k': 1e3, 'K': 1e3, 'M': 1e6, '': 1.0}[m.group(2)] if m else None
 
-def tree_len(pts):
-    if len(pts) < 2: return 0.0
-    inn = {0}; L = 0.0
-    while len(inn) < len(pts):
-        d, j = min((math.dist(pts[i], pts[j]), j) for i in inn for j in range(len(pts)) if j not in inn); inn.add(j); L += d
-    return L
-
-def exempt_pairs(B, rank):
+def exempt_pairs(B):
     """{net: {nets it is joined to through one or two low-impedance 2-pad parts}}, not by way of ground, a rail or a bias net"""
     edges = {}
     for r, f in B.fps.items():
@@ -77,16 +66,19 @@ def routing_total(path, classes=None):
     """The whole board's routing score: what a retry compares"""
     return round(sum(r['p_routing'] for r in score(path, classes)['rows'].values()), 1)
 
+def net_rank(n, cl): return checks.priority(n, cl) or (6 if n in bd.BIAS else 8 if n in bd.GROUND else 7 if bd.is_supply(n) else None)
+def net_weight(n, cl):
+    """What one mm of the net's track costs"""
+    node = next((w for pat, w in NODE_WEIGHT if fnmatch.fnmatchcase(n, pat)), None)
+    return node if node is not None else WEIGHT.get(net_rank(n, cl), UNCLASSED)
+
 def score(path, classes=None):
     B = bd.Board(path); cl = classes_for(path, classes)
-    rank = lambda n: checks.priority(n, cl) or (6 if n in bd.BIAS else 8 if n in bd.GROUND else 7 if bd.is_supply(n) else None)
-    def weight(n):
-        node = next((w for pat, w in NODE_WEIGHT if fnmatch.fnmatchcase(n, pat)), None)
-        return node if node is not None else WEIGHT.get(rank(n), UNCLASSED) if rank(n) else UNCLASSED
+    rank = lambda n: net_rank(n, cl); weight = lambda n: net_weight(n, cl)
     refs = {}
     for p in B.pads:
         if p['net']: refs.setdefault(p['net'], set()).add(p['ref'])
-    exempt = exempt_pairs(B, rank)
+    exempt = exempt_pairs(B)
     aggressors = sorted({n for n in B.nets if rank(n) in AGGRESSORS})
     line = lambda s: (LineString([(s['x1'], s['y1']), (s['x2'], s['y2'])]), s['w'] / 2)
     agg_cu = {(l, a): unary_union([g for n, g, k, o in B.copper(l) if n == a]) for l in B.copper_layers for a in aggressors if any(n == a for n, *_ in B.copper(l))}
@@ -96,7 +88,7 @@ def score(path, classes=None):
     for n in B.nets:
         r = rank(n); w = weight(n)
         segs = [s for s in B.segs if s['net'] == n]; L = sum(math.dist((s['x1'], s['y1']), (s['x2'], s['y2'])) for s in segs)
-        t = tree_len([(p['x'], p['y']) for p in B.pads if p['net'] == n and not checks.is_tp(p)]); V = sum(v['net'] == n for v in B.vias)
+        t = checks.tree_len([(p['x'], p['y']) for p in B.pads if p['net'] == n and not checks.is_tp(p)]); V = sum(v['net'] == n for v in B.vias)
         by_aggr = {}
         if victim(n):
             for l in B.copper_layers:
@@ -126,7 +118,8 @@ def score(path, classes=None):
 
 def banded(lines, near, gaps):
     """mm of the centre lines [(LineString, half width)] within each of the edge-to-edge `gaps` of the copper `near`, band by band"""
-    inside = [sum(g.intersection(near.buffer(gap + hw, 8)).length for g, hw in lines) for gap in gaps]
+    zone = {}                                                             # one buffer per (gap, half width), not per line
+    inside = [sum(g.intersection(zone.get((gap, hw)) or zone.setdefault((gap, hw), near.buffer(gap + hw, 8))).length for g, hw in lines) for gap in gaps]
     return [inside[0]] + [inside[k] - inside[k - 1] for k in range(1, len(inside))]
 
 TERMS = ('p_routing', 'p_excess', 'p_vias', 'p_coupling', 'p_placement')

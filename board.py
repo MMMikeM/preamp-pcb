@@ -59,11 +59,11 @@ def rot(x, y, r):
 class Board:
     def __init__(self, path):
         raw = open(path, encoding='utf-8', newline='').read()
-        self.path = path; self.crlf = '\r\n' in raw; self.text = raw.replace('\r', '')
+        self.path = path; self.crlf = '\r\n' in raw; self.text = raw.replace('\r', ''); self._outline = None
         self._parse()
     def _parse(self):
         B = parse(self.text); self.pads = []; self.fps = {}; self.segs = []; self.vias = []; self.zones = []
-        self._outline = None; self._copper = {}
+        self._copper = {}
         arcs = len(find(B, 'arc'))
         if arcs: raise ValueError(f'{self.path}: {arcs} arc tracks. route6 reads straight tracks only, so it could neither check nor rip them; straighten them in KiCad first.')
         for fp in find(B, 'footprint'):
@@ -89,14 +89,7 @@ class Board:
                            zone_none=(first(p, 'zone_connect') or fz or [0, '1'])[1] == '0')
                 if pad['kind'] == 'np_thru_hole': pad['net'] = ''
                 self.pads.append(pad); self.fps[ref]['pads'].append(pad)
-        for s in find(B, 'segment'):
-            a, b = first(s, 'start'), first(s, 'end')
-            self.segs.append(dict(x1=float(a[1]), y1=float(a[2]), x2=float(b[1]), y2=float(b[2]), w=float(first(s, 'width')[1]),
-                                  layer=first(s, 'layer')[1], net=first(s, 'net')[-1], uuid=first(s, 'uuid')[1], locked=is_locked(s)))
-        for v in find(B, 'via'):
-            a = first(v, 'at')
-            self.vias.append(dict(x=float(a[1]), y=float(a[2]), size=float(first(v, 'size')[1]), drill=float(first(v, 'drill')[1]),
-                                  net=first(v, 'net')[-1], uuid=first(v, 'uuid')[1], locked=is_locked(v)))
+        self.segs = [self._seg(s) for s in find(B, 'segment')]; self.vias = [self._via(v) for v in find(B, 'via')]
         for z in find(B, 'zone'):
             nm = first(z, 'name'); l = first(z, 'layer') or first(z, 'layers')
             poly = first(z, 'polygon'); cp = first(z, 'connect_pads'); cl = first(cp, 'clearance') if cp else None; mt = first(z, 'min_thickness')
@@ -105,6 +98,16 @@ class Board:
                                    clearance=float(cl[1]) if cl else 0.0, min_thickness=float(mt[1]) if mt else 0.0))
         self.copper_layers = [l[1] for l in first(B, 'layers')[1:] if l[1].endswith('.Cu')]
         self.nets = sorted({p['net'] for p in self.pads if p['net']})
+    @staticmethod
+    def _seg(s):
+        a, b = first(s, 'start'), first(s, 'end')
+        return dict(x1=float(a[1]), y1=float(a[2]), x2=float(b[1]), y2=float(b[2]), w=float(first(s, 'width')[1]),
+                    layer=first(s, 'layer')[1], net=first(s, 'net')[-1], uuid=first(s, 'uuid')[1], locked=is_locked(s))
+    @staticmethod
+    def _via(v):
+        a = first(v, 'at')
+        return dict(x=float(a[1]), y=float(a[2]), size=float(first(v, 'size')[1]), drill=float(first(v, 'drill')[1]),
+                    net=first(v, 'net')[-1], uuid=first(v, 'uuid')[1], locked=is_locked(v))
     # ---- geometry
     @staticmethod
     def pad_geom(p):
@@ -127,9 +130,8 @@ class Board:
         out += [(v['net'], self.via_geom(v), 'via', v) for v in self.vias]
         self._copper[layer] = out; return out
     def outline(self):
-        if self._outline: return self._outline
+        if self._outline: return self._outline                                # track, via and zone edits leave the edge as it is
         xs = []; ys = []
-        for m in re.finditer(r'\(gr_(?:line|arc|rect)[^()]*(?:\([^()]*\)[^()]*)*?\(layer "Edge.Cuts"\)', self.text): pass
         B = parse(self.text)
         for k in ('gr_line', 'gr_arc', 'gr_rect'):
             for g in find(B, k):
@@ -161,7 +163,10 @@ class Board:
             if net and net.group(1) in nets: out.append(self.text[s:j] + '\n')
         return out
     def add(self, chunks):
-        i = self.text.rstrip().rfind(')'); self.text = self.text[:i] + ''.join(chunks) + ')\n'; self._parse()
+        i = self.text.rstrip().rfind(')'); self.text = self.text[:i] + ''.join(chunks) + ')\n'
+        nodes = [parse(c) for c in chunks]
+        if not all(n[0] in ('segment', 'via') for n in nodes): return self._parse()
+        self.segs += [self._seg(n) for n in nodes if n[0] == 'segment']; self.vias += [self._via(n) for n in nodes if n[0] == 'via']; self._copper = {}
     def _track_blocks(self):
         """(start, last character, uuid) of every track and via block in the text"""
         for m in re.finditer(r'\n\t\((segment|via)\b', self.text):
@@ -180,14 +185,19 @@ class Board:
         for s, j, u in self._track_blocks():
             if u in uuids:
                 out.append(self.text[pos:s]); pos = j + 2; n += 1
-        out.append(self.text[pos:]); self.text = ''.join(out); self._parse(); return n
+        out.append(self.text[pos:]); self.text = ''.join(out)
+        self.segs = [s for s in self.segs if s['uuid'] not in uuids]; self.vias = [v for v in self.vias if v['uuid'] not in uuids]; self._copper = {}
+        return n
     def _rewrite(self, uuids, edit):
         uuids = set(uuids); out = []; pos = 0; done = []
         for s, j, u in self._track_blocks():
             if u not in uuids: continue
             old = self.text[s:j + 1]; new = edit(old)
-            if new != old: out += [self.text[pos:s], new]; pos = j + 1; done.append(u)
-        out.append(self.text[pos:]); self.text = ''.join(out); self._parse(); return done
+            if new != old: out += [self.text[pos:s], new]; pos = j + 1; done.append((u, is_locked(parse(new))))
+        out.append(self.text[pos:]); self.text = ''.join(out); locked = dict(done)
+        for x in self.segs + self.vias:
+            if x['uuid'] in locked: x['locked'] = locked[x['uuid']]
+        self._copper = {}; return [u for u, _ in done]
     def lock(self, uuids):
         """Marks these tracks and vias as locked, the way KiCad does. Returns the ones it locked: a piece that was locked already is
         not in the list, so handing the list to unlock() leaves the user's own locks alone."""
@@ -198,7 +208,5 @@ class Board:
         return self._rewrite(uuids, edit)
     def unlock(self, uuids):
         return self._rewrite(uuids, lambda blk: blk.replace('\n\t\t(locked yes)', '', 1))
-    def save(self, path=None, crlf=None):
-        path = path or self.path
-        if crlf is None: crlf = self.crlf
-        with open(path, 'w', encoding='utf-8', newline='') as fh: fh.write(self.text.replace('\n', '\r\n') if crlf else self.text)
+    def save(self, path=None):
+        with open(path or self.path, 'w', encoding='utf-8', newline='') as fh: fh.write(self.text.replace('\n', '\r\n') if self.crlf else self.text)

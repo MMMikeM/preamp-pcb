@@ -1,3 +1,27 @@
+# route6: reviewer feedback (24 Nov 2026, fourth): tie rule, U3C--, a correction
+
+- **Tie rule.** Routing scores within 1 mm of the net's own weight of the lowest are a tie; of those, fewest vias, then
+  least track. The board before the lift is a candidate too when the net is already joined. A 1 % band was too wide (about
+  14 points) and threw away real gains on 7bccb83 and aligned.
+- **`Net-(U3C--)` is P4** in seven fixtures' `.kicad_pro`. 74f5949 and eacfa31 really have `Net-(U3B--)` and are unchanged.
+- **Correction:** "each passes `check --final`" in the third reply was wrong. Those runs started at 2d on older boards.
+  From setup, HEAD fails 2e on shift127 and aligned with a KRT end gap on `/Bridge/SB`: the router joined a track whose round
+  end only reaches a via's edge, and `checks.ends_in` ignored the track's width, so `drop_dangling` cut it. Fixed.
+- **Speed:** shift127 from setup to 2f takes 194 s instead of 681 s with identical copper. The suite takes 50 s.
+
+### `check --final` from setup
+| Board | Result |
+|---|---|
+| 83962f0, 509fb5a | pass |
+| shift127 | `/Bridge/SB` too long, 34.3 mm against a 19.0 mm tree |
+| aligned | `/Bridge/SB` too long (34.5 mm), and one unjustified SB via |
+| 7bccb83 | `/Bridge/SA` too long (46.6 mm), the same at HEAD |
+
+On shift127 and aligned both SB lifts come back at 30 mm and 4 vias, no better than before, so neither is kept. The long
+bridge SA/SB joins are next on our side.
+
+---
+
 # route6: reviewer feedback (24 Nov 2026, third): your score answers, applied
 
 `score.py` now uses your answers; the proposal section further down describes the earlier placeholders.

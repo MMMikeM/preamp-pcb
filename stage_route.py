@@ -20,7 +20,7 @@ With ROUTER_DIR set, every step also gets a second opinion from the router's own
 The router is KiCadRoutingTools (not included): set ROUTER_DIR to its checkout. Steps 2b, 2c, 2h, check and setup do not need it."""
 import sys, os, subprocess, shutil, argparse, json, math, time, re, contextlib, fnmatch, heapq, itertools, signal
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
-import board as bd, toplink as tl, checks, krt_checks, mirror_route, drops, via_justify, hand_access
+import board as bd, toplink as tl, checks, krt_checks, mirror_route, drops, via_justify, hand_access, score
 from shapely.geometry import LineString, Point, Polygon, box
 from shapely.strtree import STRtree
 from shapely.ops import unary_union
@@ -162,26 +162,13 @@ def guard(A, out, routed):
     stray = sorted({x['net'] for x in B.segs + B.vias if x['uuid'] not in old and x['net'] not in routed})
     said = [f'{what} {nets}' for what, nets in (('removed earlier copper of', gone), ('changed earlier copper of', changed), ('added copper for nets it was not given:', stray)) if nets]
     if said: raise StepFailed(f"the router {'; '.join(said)}. Its board is kept as {out}")
-def tree_len(pts):
-    if len(pts) < 2: return 0.0
-    inn = {0}; L = 0.0
-    while len(inn) < len(pts):
-        d, j = min((math.dist(pts[i], pts[j]), j) for i in inn for j in range(len(pts)) if j not in inn); inn.add(j); L += d
-    return L
-def classes_beside(board):
-    """{class: [net patterns]} from the .kicad_pro beside the board, or None"""
-    pro = os.path.splitext(board)[0] + '.kicad_pro'
-    if not os.path.exists(pro): return None
-    cl = {}
-    for p in json.load(open(pro)).get('net_settings', {}).get('netclass_patterns') or []: cl.setdefault(p['netclass'], []).append(p['pattern'])
-    return cl
 def leaves_top(B, net): return any(v['net'] == net for v in B.vias) or any(s['net'] == net and s['layer'] != 'F.Cu' for s in B.segs)
 def finish(step, commit, final=False, failed=None):
     saved = [os.path.join(WORK, f'{step}.kicad_pcb'), os.path.join(WORK, f'{step}_checks.json')]
     shutil.copy(BOARD, saved[0])
     with timed('load board', kind='check'): B = bd.Board(BOARD)
     per = {}
-    cl = classes_beside(BOARD) or (json.load(open(os.path.join(WORK, 'net_classes.json'))) if os.path.exists(os.path.join(WORK, 'net_classes.json')) else None)
+    cl = checks.classes_beside(BOARD) or (json.load(open(os.path.join(WORK, 'net_classes.json'))) if os.path.exists(os.path.join(WORK, 'net_classes.json')) else None)
     with timed('own checks', kind='check') as rec: R = checks.report(B, justify=final or step not in ('setup', '2a'), timing=per, classes=cl); rec['per_check_s'] = per
     # a joined net over its off-top limit is reported, not a stop: the run goes on, so the placement can be judged on a whole board
     # on P4 and P5, low-impedance, it is a warning, as an unjustified via is there
@@ -229,16 +216,12 @@ for _switch in ('KICAD_RIP_PREEXISTING', 'KICAD_FINALIZE_RIP', 'KICAD_RECONCILE_
 L3_RATIO = 1.8; L3_RATIO_LOW_Z = 2.2; L3_EXTRA = 12.0; PINCH = 0.25; HZ_NEAR = tl.HZ_KEEP; HZ_RUN = 3.0; OWN_PAD = 2.5     # a top route is rejected if it squeezes between two foreign pads, or runs more than HZ_RUN mm inside the soft keep-away of a high-impedance net
 TOP_ONLY = ['--via-cost', '100000']; TOP_AND_L3 = ['--layer-costs', '1.0', '1.2', '--via-cost', '150']
 def joins_short(B, net):
-    L, t = length_and_tree(B, net); return not checks.top_incomplete(B, net) and L <= max(TOP_RATIO * t, t + TOP_EXTRA)
+    L, t = checks.length_and_tree(B, net); return not checks.top_incomplete(B, net) and L <= max(TOP_RATIO * t, t + TOP_EXTRA)
 def copper_ids(B): return {x['uuid'] for x in B.segs + B.vias}
 def drop_new(B, nets, since):
     """Removes the nets' tracks and vias that are not in `since` and saves the board"""
     gone = [x['uuid'] for x in B.segs + B.vias if x['net'] in nets and x['uuid'] not in since]
     if gone: B.remove(gone); B.save(BOARD)
-def length_and_tree(B, net):
-    """(track length, shortest tree through the pads) of a net, test points aside"""
-    return (sum(math.dist((x['x1'], x['y1']), (x['x2'], x['y2'])) for x in B.segs if x['net'] == net),
-            tree_len([(p['x'], p['y']) for p in B.pads if p['net'] == net and not checks.is_tp(p)]))
 def per_board(B, key, make):
     """make(B), worked out once for each state of the board: every edit re-parses it into a new text"""
     memo = B.__dict__.setdefault('_memo', {}); hit = memo.get(key)
@@ -265,8 +248,11 @@ def squeezed(B, net, since):
     return [x for x in pinch if x.split('.')[0] not in under]
 def judge_top(B, net, since):
     """(kind, detail) of why the net's top-layer route newer than `since` is refused, or None"""
-    L, t = length_and_tree(B, net)
+    L, t = checks.length_and_tree(B, net)
     if L > max(TOP_RATIO * t, t + TOP_EXTRA): return 'too long on top', f'too long on top ({L:.0f} mm for a {t:.0f} mm tree)'
+    return crowded(B, net, since)
+def crowded(B, net, since):
+    """(kind, detail) if the net's top-layer track newer than `since` squeezes between foreign pads or runs beside high-impedance copper, or None"""
     pinch = squeezed(B, net, since)
     if len(pinch) >= 2: return 'squeezed', f'squeezed on top, under {PINCH} mm from {pinch}'
     near = hz_run(B, net, since)
@@ -291,7 +277,7 @@ def top_first(nets, label):
 def in_class(net, cl, *classes): return any(fnmatch.fnmatchcase(net, p) for c in classes for p in cl.get(c, []))
 def wanders(B, net, ratio=L3_RATIO):
     """(too long, length, shortest tree) of a net that was allowed off the top layer"""
-    L, t = length_and_tree(B, net)
+    L, t = checks.length_and_tree(B, net)
     return L > max(ratio * t, t + L3_EXTRA), L, t
 def too_long_to_pass(B, net, cl):
     """wanders, at the limit a finished net must meet. Stage 2 and the outputs are low-impedance, so length costs them little"""
@@ -327,7 +313,8 @@ def top_again(nets, step):
     high-impedance copper; otherwise the board goes back. The new link is judged, not the whole net: a net that also runs on L3
     may be long already, and the top-only limit for whole nets would refuse any link. Not judged by score.py: mid-step, the nets
     routed later are not there yet, and on one board that refused a move the finished board was better for."""
-    for x in via_justify.check(bd.Board(BOARD), nets=[n for n in nets if bd.is_signal(n)]):
+    with timed(f'{step} via check for the top retry', kind='check'): flags = via_justify.check(bd.Board(BOARD), nets=[n for n in nets if bd.is_signal(n)])
+    for x in flags:
         B = bd.Board(BOARD); n = x['net']; off = joined_off_top(B, n, x['vias_a'], x['vias_b'])
         if not off or any(o['locked'] for o in off): continue
         shutil.copy(BOARD, BOARD + '.via'); before = copper_ids(B)
@@ -335,12 +322,8 @@ def top_again(nets, step):
         try:
             router([n], ['F.Cu'], TOP_ONLY, add_only=True); drop_dangling([n], step); B = bd.Board(BOARD)
             link = sum(math.dist((s['x1'], s['y1']), (s['x2'], s['y2'])) for s in B.segs if s['net'] == n and s['uuid'] not in before and s['layer'] == 'F.Cu')
-            pinch = squeezed(B, n, before)
-            why = next((w for bad, w in (
-                (checks.top_incomplete(B, n), ('open', 'not joined on top')),
-                (link > x['limit'], ('too long', f"a {link:.1f} mm top link for a {x['limit']:.1f} mm limit")),
-                (len(pinch) >= 2, ('squeezed', f'squeezed on top, under {PINCH} mm from {pinch}')),
-                (hz_run(B, n, before) > HZ_RUN, ('beside high-impedance copper', 'runs beside high-impedance copper'))) if bad), None)
+            why = (('open', 'not joined on top') if checks.top_incomplete(B, n) else
+                   ('too long', f"a {link:.1f} mm top link for a {x['limit']:.1f} mm limit") if link > x['limit'] else crowded(B, n, before))
         except StepFailed as e: why = ('router', f'the retry failed ({e})')      # an optional clean-up must not cost the step what it already routed
         if why: shutil.copy(BOARD + '.via', BOARD)
         count(f'{step} flagged vias retried on top'); count(f'{step} flagged vias replaced on top', int(not why))
@@ -448,7 +431,13 @@ def route_bias(nets):
     return router(nets, ['In2.Cu', 'In4.Cu'], ['--layer-costs', os.environ.get('BIAS_L3_COST', '2.0'), '1.0', '--via-cost', '40', '--track-width', '0.4',
                                                '--direction-preference-cost', '1000'])
 FRONT_LONG = 1.5; BOX = 2.0
-def rank(net, cl): return checks.priority(net, cl) or (6 if net in bd.BIAS else 99)
+SCORE_TIE_MM = 1.0                                                                # routing scores closer than this much of the net at stake are a tie
+def best_routing(found, tie):
+    """found: [(score, board, ...)]; the lowest score, or of those within tie of it, the board with fewest vias, then least track"""
+    if not found: return None
+    lo = min(f[0] for f in found); size = lambda B: (len(B.vias), sum(math.dist((s['x1'], s['y1']), (s['x2'], s['y2'])) for s in B.segs))
+    return min((f for f in found if f[0] <= lo + tie), key=lambda f: size(bd.Board(f[1])))
+def rank(net, cl): return score.net_rank(net, cl) or 99
 def clear_the_way(nets, step):
     """The router, not the net classes, decides the order of an L3 call, and 2d lays the bias on L3 before any signal. So a net still
     open, or a front-end net that joined off the top layer at over FRONT_LONG x its tree, may have been shut out or sent round by a
@@ -456,15 +445,14 @@ def clear_the_way(nets, step):
     lifted, the net is joined first (pad vias and L3, then with router vias if it must), and the lifted nets are routed again round it.
     Two lifts are tried from the same board, the bias alone and every lower-priority net in the box. A result counts only if the net
     joins (and, if it was long, is shorter with no more vias), every lifted net that was joined still is, nothing new is squeezed or
-    runs beside high-impedance copper, and no supply zone is cut. Of those, the one with the lowest routing score (score.py) is kept,
-    if the net was open or that score is lower than before; otherwise the board goes back. A lifted net that comes out longer is
+    runs beside high-impedance copper, and no supply zone is cut. Of those and, if the net was joined, the board as it was, the one with the
+    lowest routing score (score.py) is kept, a tie going to fewer vias, then fewer mm (best_routing). A lifted net that comes out longer is
     weighed by the score, not refused: on one board refusing it kept a 57 mm route over a 25 mm one."""
-    import score
     cl = net_classes() if os.path.exists(os.path.join(WORK, 'net_classes.json')) else {}
     vias = lambda B, m: sum(v['net'] == m for v in B.vias)
     def attempt(n, lift, shut, long):
         """Routes it from the board as it was; returns why the result does not count, or None"""
-        B = bd.Board(BOARD); L = length_and_tree(B, n)[0]; start = copper_ids(B)
+        B = bd.Board(BOARD); L = checks.length_and_tree(B, n)[0]; start = copper_ids(B)
         was = dict(L=L, vias=vias(B, n), zones=len(checks.zone_integrity(B)), open={m for m in lift if checks.top_incomplete(B, m)})
         B.remove([s['uuid'] for s in B.segs if s['layer'] == 'In2.Cu' and s['net'] in [n] + lift]); B.save(BOARD)
         sig = [m for m in lift if m not in bd.BIAS]; bias = [m for m in lift if m in bd.BIAS]
@@ -479,16 +467,15 @@ def clear_the_way(nets, step):
                 if again: wide_then_standard(again, step)
             if bias: route_bias(bias)
             drop_dangling([n] + lift, step)
-            B = bd.Board(BOARD); now = length_and_tree(B, n)[0]
-            return next((w for bad, w in (
-                (checks.top_incomplete(B, n), 'not joined'),
-                (long and (now >= was['L'] or vias(B, n) > was['vias']), f'{now:.0f} mm, {vias(B, n)} vias'),
-                (any(checks.top_incomplete(B, m) for m in lift if m not in was['open']), 'a lifted net left open'),
-                (any(len(squeezed(B, m, start)) >= 2 or hz_run(B, m, start) > HZ_RUN for m in [n] + sig), 'squeezed or beside high-impedance copper'),
-                (len(checks.zone_integrity(B)) > was['zones'], 'a supply zone cut')) if bad), None)
+            B = bd.Board(BOARD); now = checks.length_and_tree(B, n)[0]
+            if checks.top_incomplete(B, n): return 'not joined'
+            if long and (now >= was['L'] or vias(B, n) > was['vias']): return f'{now:.0f} mm, {vias(B, n)} vias'
+            if any(checks.top_incomplete(B, m) for m in lift if m not in was['open']): return 'a lifted net left open'
+            if any(crowded(B, m, start) for m in [n] + sig): return 'squeezed or beside high-impedance copper'
+            if len(checks.zone_integrity(B)) > was['zones']: return 'a supply zone cut'
         except StepFailed as e: return f'the retry failed ({e})'
     for n in nets:
-        B = bd.Board(BOARD); L, t = length_and_tree(B, n); shut = checks.top_incomplete(B, n)
+        B = bd.Board(BOARD); L, t = checks.length_and_tree(B, n); shut = checks.top_incomplete(B, n)
         long = not shut and in_class(n, cl, 'P2_FrontEnd') and L > FRONT_LONG * t and any(s['net'] == n and s['layer'] == 'In2.Cu' for s in B.segs)
         if not (shut or long): continue
         xs, ys = zip(*[(p['x'], p['y']) for p in B.pads if p['net'] == n and not checks.is_tp(p)])
@@ -498,17 +485,20 @@ def clear_the_way(nets, step):
         bias = [m for m in lower if m in bd.BIAS]
         lifts = [x for x in (bias, lower) if x][:2 if bias != lower else 1]
         if not lifts: continue
-        shutil.copy(BOARD, BOARD + '.clear'); before = None if shut else score.routing_total(BOARD, cl); found = []
+        def scored():
+            with timed(f'{step} routing score'): return score.routing_total(BOARD, cl)
+        shutil.copy(BOARD, BOARD + '.clear'); before = None if shut else scored()
+        found = [] if shut else [(before, BOARD + '.clear', None)]
         for k, lift in enumerate(lifts):
             shutil.copy(BOARD + '.clear', BOARD); why = attempt(n, lift, shut, long)
-            got = None if why else score.routing_total(BOARD, cl)
-            if not why: shutil.copy(BOARD, BOARD + f'.clear{k}'); found.append((got, k, lift))
+            got = None if why else scored(); C = bd.Board(BOARD)
+            if not why: shutil.copy(BOARD, BOARD + f'.clear{k}'); found.append((got, BOARD + f'.clear{k}', lift))
             count(f'{step} nets routed again with lower-priority L3 lifted')
             print(f"  {n} ({'open' if shut else f'{L:.0f} mm'}) routed on L3 before {lift}: " + (f'does not count ({why})' if why else
-                  f"{length_and_tree(bd.Board(BOARD), n)[0]:.0f} mm and {vias(bd.Board(BOARD), n)} vias, routing score {got:.0f}" + ('' if shut else f' (was {before:.0f})')))
-        best = min(found, default=None)
-        if best and (shut or best[0] < before):
-            shutil.copy(BOARD + f'.clear{best[1]}', BOARD); count(f'{step} of those kept'); print(f'  kept: {n} with {best[2]} lifted')
+                  f"{checks.length_and_tree(C, n)[0]:.0f} mm and {vias(C, n)} vias, routing score {got:.0f}" + ('' if shut else f' (was {before:.0f})')))
+        best = best_routing(found, SCORE_TIE_MM * score.net_weight(n, cl))
+        if best and best[2] is not None:
+            shutil.copy(best[1], BOARD); count(f'{step} of those kept'); print(f'  kept: {n} with {best[2]} lifted')
         else: shutil.copy(BOARD + '.clear', BOARD)
         for f in [BOARD + '.clear'] + [BOARD + f'.clear{k}' for k in range(len(lifts))]:
             if os.path.exists(f): os.remove(f)
@@ -535,7 +525,7 @@ def run_step(s, src):
     if s == 'setup':
         if not src: raise SystemExit('--from BOARD needed')
         sh([PY, os.path.join(HERE, 'setup6.py'), src, BOARD]); link_unpoured_ground()
-        cl = classes_beside(src)
+        cl = checks.classes_beside(src)
         if cl is None: print('  no .kicad_pro beside the board, so step 2p has no net classes')
         else: json.dump(cl, open(os.path.join(WORK, 'net_classes.json'), 'w'), indent=1)
         B = bd.Board(BOARD)                                                    # a warning, not a failure: the placement is the author's to fix, and routing can still run

@@ -1,4 +1,4 @@
-"""Run from the route6 folder:  python -m pytest -q tests      (about 4 minutes; needs shapely and numpy, not the router)"""
+"""Run from the route6 folder:  python -m pytest -q tests      (about a minute; needs shapely and numpy, not the router)"""
 import os, sys, math, re, json, copy, itertools, subprocess, pytest
 from shapely.geometry import Point, box
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, os.path.dirname(HERE))
@@ -25,11 +25,14 @@ def work(tmp_path, monkeypatch):
     monkeypatch.setattr(stage_route, 'WORK', str(tmp_path)); monkeypatch.setattr(stage_route, 'BOARD', str(tmp_path / 'board.kicad_pcb')); return tmp_path
 def ends(B, n): return [p for p in B.pads if p['net'] == n and not checks.is_tp(p)]
 def straight(B, n): a, b = ends(B, n); track(B, n, [(a['x'], a['y']), (b['x'], b['y'])])
+_CLOSE = {}
 def close_pairs(B):
     """signal nets of two top-layer pads under 5 mm apart whose straight top track passes the pass-1 judging"""
     def fits(n): C = copy.deepcopy(B); straight(C, n); return stage_route.judge_top(C, n, {x['uuid'] for x in B.segs}) is None
-    return [n for n in B.nets if bd.is_signal(n) and len(ends(B, n)) == 2 and all('F.Cu' in p['layers'] for p in ends(B, n))
-            and math.dist(*[(p['x'], p['y']) for p in ends(B, n)]) < 5 and fits(n)]
+    if B.text not in _CLOSE:                                                            # most tests ask this of the same untouched board
+        _CLOSE[B.text] = [n for n in B.nets if bd.is_signal(n) and len(ends(B, n)) == 2 and all('F.Cu' in p['layers'] for p in ends(B, n))
+                          and math.dist(*[(p['x'], p['y']) for p in ends(B, n)]) < 5 and fits(n)]
+    return list(_CLOSE[B.text])
 
 def test_reader_counts():
     B = bd.Board(OLD); assert len(B.vias) == 137 and len(B.fps) > 150 and B.copper_layers == ['F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu']
@@ -380,11 +383,12 @@ def test_a_ground_pad_with_no_zone_connection_is_linked_on_top(bare, work):
     assert cut and {checks.label(p) for p in cut} <= loose(bare)                          # the pours do not reach them, so the check must not count them joined
     bare.save(stage_route.BOARD); stage_route.link_unpoured_ground(); B = bd.Board(stage_route.BOARD)
     assert not {checks.label(p) for p in cut} & loose(B) and checks.clearances(B) == [] and {s['layer'] for s in B.segs} == {'F.Cu'}
-def test_a_via_on_one_layer_is_removed_and_track_ends_that_met_through_it_are_joined(bare, work):
+@pytest.mark.parametrize('before, after', [(0.2, 0.2), (0, 0.225)])                       # the second: one end on the via's edge, its round end inside
+def test_a_via_on_one_layer_is_removed_and_track_ends_that_met_through_it_are_joined(bare, work, before, after):
     n, m = close_pairs(bare)[:2]
     straight(bare, n); a, b = ends(bare, n); bare.add([bare.via_text(a['x'], a['y'], 0.45, 0.2, n)])          # a pad via whose L3 join was never made
     a, b = ends(bare, m); x, y = (a['x'] + b['x']) / 2, (a['y'] + b['y']) / 2; d = math.dist((a['x'], a['y']), (b['x'], b['y'])); ux, uy = (b['x'] - a['x']) / d, (b['y'] - a['y']) / d
-    track(bare, m, [(a['x'], a['y']), (x - 0.2 * ux, y - 0.2 * uy)]); track(bare, m, [(x + 0.2 * ux, y + 0.2 * uy), (b['x'], b['y'])])
+    track(bare, m, [(a['x'], a['y']), (x - before * ux, y - before * uy)]); track(bare, m, [(x + after * ux, y + after * uy), (b['x'], b['y'])])
     bare.add([bare.via_text(x, y, 0.45, 0.2, m)])                                         # two top tracks that meet only through this via
     assert {v['net'] for v in checks.dangling_vias(bare)} == {n, m}                        # KiCad's test: copper on one layer only, whatever it joins there
     bare.save(stage_route.BOARD); stage_route.drop_dangling([n, m], 'test'); B = bd.Board(stage_route.BOARD)
@@ -395,8 +399,8 @@ def test_a_via_with_only_a_track_from_a_pad_goes_with_that_track(bare, work):
     bare.save(stage_route.BOARD); stage_route.drop_dangling([n], 'test'); B = bd.Board(stage_route.BOARD)
     assert not B.vias and len(B.segs) == 1 and not checks.top_incomplete(B, n)
 def test_stage_2_and_the_outputs_may_run_longer_off_the_top_layer(bare):
-    n = next(n for n in bare.nets if bd.is_signal(n) and stage_route.length_and_tree(bare, n)[1] > 16)
-    t = stage_route.length_and_tree(bare, n)[1]; p = ends(bare, n)[0]; track(bare, n, [(p['x'], p['y']), (p['x'], p['y'] + 2 * t)], layer='In2.Cu')
+    n = next(n for n in bare.nets if bd.is_signal(n) and checks.length_and_tree(bare, n)[1] > 16)
+    t = checks.length_and_tree(bare, n)[1]; p = ends(bare, n)[0]; track(bare, n, [(p['x'], p['y']), (p['x'], p['y'] + 2 * t)], layer='In2.Cu')
     assert stage_route.too_long_to_pass(bare, n, {})[0] and stage_route.too_long_to_pass(bare, n, {'P5_AudioOut': [n]})[0] is False
 def test_the_copy_step_passes_when_no_net_has_a_twin(bare, tmp_path):
     text = bare.text
@@ -490,6 +494,11 @@ def test_a_net_shut_out_by_a_lower_priority_l3_track_is_joined_first_and_that_tr
     monkeypatch.setattr(stage_route, 'run_router', run); monkeypatch.setattr(checks, 'dangling_tracks', lambda B, nets=None: [])
     stage_route.clear_the_way([n], 'test'); B = bd.Board(stage_route.BOARD)
     assert calls[0] == [n] and [m] in calls and not checks.top_incomplete(B, n) and l3(B, m) == pytest.approx(6.0)
+def test_a_routing_score_tie_goes_to_fewer_vias(bare, tmp_path):
+    n = close_pairs(bare)[0]; a = ends(bare, n)[0]; plain = str(tmp_path / 'plain.kicad_pcb'); more = str(tmp_path / 'more.kicad_pcb')
+    bare.save(plain); bare.add([bare.via_text(a['x'], a['y'], 0.45, 0.2, n)]); bare.save(more)
+    assert stage_route.best_routing([(1056, more, 'x'), (1058, plain, 'y')], 3)[2] == 'y'
+    assert stage_route.best_routing([(1052, more, 'x'), (1058, plain, 'y')], 3)[2] == 'x'
 def test_a_net_too_long_off_the_top_layer_fails_only_the_final_check(bare, work, monkeypatch):
     monkeypatch.delenv('ROUTER_DIR', raising=False); n = close_pairs(bare)[0]; a, b = ends(bare, n)
     bare.add([bare.via_text(p['x'], p['y'], 0.45, 0.2, n) for p in (a, b)]); track(bare, n, [(a['x'], a['y']), (a['x'], a['y'] + 20), (b['x'], b['y'])], layer='In2.Cu')

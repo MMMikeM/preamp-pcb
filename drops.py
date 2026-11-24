@@ -24,15 +24,17 @@ class Placer:
     def refresh(self):
         B = self.B; self.cu = []
         for l in B.copper_layers: self.cu += [(n, g) for n, g, k, o in B.copper(l)]
-        self.tree = STRtree([g for _, g in self.cu])
+        self.tree = STRtree([g for _, g in self.cu]); self.placed = []
         self.holes = [(v['x'], v['y'], v['drill']) for v in B.vias] + [(p['x'], p['y'], p['drill']) for p in B.pads if p['drill']]
     def legal(self, x, y, size, drill, net):
         if bd.edge_room(self.outline, x, y, size / 2) < bd.EDGE - 1e-6: return False
         g = Point(x, y).buffer(size / 2, 16)
-        for j in self.tree.query(g.buffer(bd.CLEAR_HZ + 0.01)):
-            n, h = self.cu[int(j)]
+        for n, h in [self.cu[int(j)] for j in self.tree.query(g.buffer(bd.CLEAR_HZ + 0.01))] + self.placed:
             if n != net and g.distance(h) < bd.clearance(net, n) - 1e-6: return False
         return all(math.dist((x, y), h[:2]) - drill / 2 - h[2] / 2 >= bd.HOLE_GAP - 1e-6 for h in self.holes)
+    def place(self, x, y, size, drill, net):
+        """Adds a via this placer has just found legal: cheaper than refresh(), which rebuilds every layer's copper"""
+        self.placed.append((net, Point(x, y).buffer(size / 2, 16))); self.holes.append((x, y, drill))
     def spot(self, p):
         horiz = p['w'] >= p['h']; reach = max(abs(p['w'] - p['h']) / 2, 0)
         for size, drill in via_sizes(p):                      # the centre at a smaller size beats a slide at a bigger one only if the bigger fits nowhere
@@ -54,7 +56,7 @@ def run(B, ground=False, supply=False, testpoints=False, signals=(), log=print):
         if not s:
             if report: failed.append(dict(pad=checks.label(p), net=p['net'], why=why))
             return False
-        B.add([B.via_text(*s, p['net'])]); P.refresh(); added.append(dict(pad=checks.label(p), net=p['net'], at=[round(s[0], 3), round(s[1], 3)], size=s[2], why=why)); return True
+        B.add([B.via_text(*s, p['net'])]); P.place(*s, p['net']); added.append(dict(pad=checks.label(p), net=p['net'], at=[round(s[0], 3), round(s[1], 3)], size=s[2], why=why)); return True
     if ground:
         for p in list(B.pads):
             if p['net'] in bd.GROUND and smd_top(p) and not checks.is_tp(p): drop(p, 'ground')
