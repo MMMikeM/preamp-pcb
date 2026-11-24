@@ -9,6 +9,8 @@ Step-by-step 6-layer routing helpers for the humbucker preamp board. Start with 
     python stage_route.py check --final       # also fails on unconnected nets, unjustified vias (P1-P3), copper that joins nothing
                                               # and nets too long off the top layer; --board PATH checks that board instead
 
+    python score.py work/2i.kicad_pcb OTHER.kicad_pcb --classes work/net_classes.json   # weighted score, and what changed and why
+
 Everything is written to `work/`. The project board is only read.
 
 ## Steps

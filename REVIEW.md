@@ -1,3 +1,59 @@
+# route6: proposal, 24 Nov 2026: a score weighted by node
+
+Total millimetres and vias treat 20 mm of V+ like 20 mm of GA. `score.py` (read-only, not wired into any step) weighs each net
+by how much it cares, so a change can be judged by what it does electrically. **The weights and two constants are yours to
+set; the numbers below are placeholders from the parts list.**
+
+## What it scores
+Per net, weight x:
+- **placement**: its shortest pad-to-pad tree (only moving parts changes it; reported apart, not part of the routing score);
+- **excess**: length over that tree;
+- **vias**: `VIA_MM` (2) mm per via;
+- **coupling**: `COUPLE_MM` (5) x its length beside an output (P5) on the same layer, by edge-to-edge gap: within 0.3 mm in
+  full, 0.6 half, 1.0 a quarter; round the gates 1, 2 and 3 mm (the pipeline already keeps outputs 1 mm off them). L2 and
+  L4 are ground, so top and L3 do not see each other. Victims are P1-P3.
+- **Not charged:** two nets the circuit joins through one or two 2-pad parts with R <= 10k or C >= 100p, not by way of
+  ground, a rail or bias (stray capacitance there sits beside a far lower path). It prints the pairs; on 7bccb83: DA-OA
+  (1k, 270p), DB-OB, SA-OA (2k), SB-OA, SB-OB (1k), SA-OB and SB-CLD through the other source, the C104/C105 nodes to
+  DRVA/DRVB (100n), the C106/C107 nodes to OA/OB (270p), and the bridge twins. GA to CLD (330k) is charged.
+
+| Weight | Nets | Why |
+|---|---|---|
+| 100 | GA, GB, LINK | the pickup node: only 47M and 220p on it |
+| 30 | SVN, SVP, SVN_I, SVP_I | 10M and 47M nodes |
+| 10 | DA, DB | op-amp inputs: stray capacitance touches loop stability |
+| 10 | VB | gate bias, decoupled by C103 (100n to GND) |
+| 3 | other P2 (SA, SB, emitter and coupling-cap nodes), P4, P6 | kilohm nodes |
+| 1 | P5 | low-impedance outputs |
+| 0.3 / 0 | P7 / GND | |
+
+`Net-(U3C--)` has no class in the `.kicad_pro` (`Net-(U3B--)`, `Net-(U4B--)`, `Net-(U6C--)` do); it gets 3.
+
+## What it says about changes made here
+| Change | mm / vias | Routing score | Driven by |
+|---|---|---|---|
+| mirrorB: SB routed round the bias | bridge 456 -> 426 mm, 23 -> 22 vias | -95 bridge, +22 bias | SB's excess -12 mm; an output no longer beside `Net-(Q201-E)` |
+| 7bccb83: lifting every lower net, not bias first | neck 453 -> 462 mm | +93 neck | SA +10 mm, 9 mm more beside CLD |
+| mirrorB: OB moved on top (`345d035`) | bridge 426 -> 445 mm, 22 -> 19 vias | -30 bridge | OBN no longer beside two P2 nodes; OA's +15 mm is P5 |
+| 83962f0: OB moved on top (`345d035`) | bridge 403 -> 401 mm, 18 -> 16 vias | -22 bridge | SB 3 mm shorter, one via fewer, less beside OBN |
+
+Each verdict holds with any one weight, `VIA_MM` or `COUPLE_MM` multiplied or divided by 3, so none hangs on a guess.
+
+## Output, for your reports too
+One board: per channel the routing score split into excess, vias and coupling, each with its raw value (mm, count, coupled
+mm), subtotals by class, and the nets that cost most with their coupling per output net. Two boards: per channel the change
+in each term and which one drove it, and per net the change with its excess, vias and coupling per output net. `--json`
+writes the weights and constants, both boards and the change. Please include the two-board summary when you report a
+placement or routing change, alongside mm and vias.
+
+## Questions
+1. The weights: right order of magnitude, per node?
+2. `COUPLE_MM` (how much worse a millimetre beside an output is than a millimetre of length) and the bands: no derivation
+   here; your call.
+3. Aggressors: only P5 now. Should the drains, or anything else that swings, count too?
+
+---
+
 # route6: reviewer feedback (24 Nov 2026)
 
 Reply to `FEEDBACK_23NOV_LATE.md` and the 7bccb83 note. KiCadRoutingTools v0.24.1, `BIAS_L3_COST=1.0`, supply on.
