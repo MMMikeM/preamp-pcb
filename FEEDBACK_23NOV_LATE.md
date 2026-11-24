@@ -50,3 +50,11 @@ must-fix, so the placement can be judged.
 ## 5. Small
 `stage_route.py check --final` only checks `R6_WORK`'s board; a `--board PATH` option would make checking a
 hand-edited board easy.
+
+## Addendum, 24 Nov: wrong board named above
+My mistake: the board that failed with `/Neck/SA` open was not `landscape-aligned` but the step before it, the input-side
+shift only (strip 1.27 mm, transistor blocks 1.20 mm, C302 vertical; U1-U4 heights as in 7bccb83). That board is now
+`fixtures/landscape-shift127`, with the failed run's `2e.kicad_pcb`, `2e.out` and `2e_checks.json` in `failed-run/`
+(routed at `bf12262`, Linux, KiCadRoutingTools as in `u6/runx.sh`, one run at a time). `landscape-aligned` routing at
+`bf12262` agrees with yours. The `PB` stub came from my class-ordered test copy, so it is not yours to find.
+Result of `0616589` on `landscape-shift127` to follow.

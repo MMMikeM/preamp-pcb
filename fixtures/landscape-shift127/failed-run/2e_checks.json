@@ -1,0 +1,516 @@
+{
+ "unconnected": [
+  {
+   "net": "/Bridge/DRVA",
+   "pieces": 2,
+   "pads": [
+    [
+     "JP201.2"
+    ]
+   ]
+  },
+  {
+   "net": "/Bridge/DRVB",
+   "pieces": 2,
+   "pads": [
+    [
+     "C205.2"
+    ]
+   ]
+  },
+  {
+   "net": "/Neck/SA",
+   "pieces": 3,
+   "pads": [
+    [
+     "RS101.2"
+    ],
+    [
+     "U1.1"
+    ]
+   ]
+  },
+  {
+   "net": "Net-(C204-Pad2)",
+   "pieces": 2,
+   "pads": [
+    [
+     "R203.1"
+    ]
+   ]
+  },
+  {
+   "net": "Net-(C205-Pad1)",
+   "pieces": 2,
+   "pads": [
+    [
+     "R204.2"
+    ]
+   ]
+  }
+ ],
+ "clearance": [],
+ "holes": [],
+ "edge": [],
+ "hz": [],
+ "no_via_pads": [],
+ "zone_integrity": [],
+ "symmetry": [
+  {
+   "ref": "J103",
+   "twin": "J203",
+   "dx_mirror": -0.318,
+   "dx_copy": 19.2,
+   "dy": 0.062
+  },
+  {
+   "ref": "R105",
+   "twin": "R205",
+   "dx_mirror": -6.392,
+   "dx_copy": -24.97,
+   "dy": -0.962
+  },
+  {
+   "ref": "R119",
+   "twin": "R219",
+   "dx_mirror": -1.0,
+   "dx_copy": 4.158,
+   "dy": 1.017
+  },
+  {
+   "ref": "Q101",
+   "twin": "Q201",
+   "dx_mirror": 0.383,
+   "dx_copy": -8.763,
+   "dy": 1.511
+  },
+  {
+   "ref": "C111",
+   "twin": "C211",
+   "dx_mirror": 0.113,
+   "dx_copy": -10.089,
+   "dy": -0.84
+  },
+  {
+   "ref": "R118",
+   "twin": "R218",
+   "dx_mirror": 3.125,
+   "dx_copy": 8.283,
+   "dy": 1.098
+  },
+  {
+   "ref": "R126",
+   "twin": "R226",
+   "dx_mirror": 0.061,
+   "dx_copy": 12.725,
+   "dy": -0.088
+  },
+  {
+   "ref": "C101",
+   "twin": "C201",
+   "dx_mirror": 0.207,
+   "dx_copy": -28.773,
+   "dy": 0.297
+  },
+  {
+   "ref": "Q103",
+   "twin": "Q203",
+   "dx_mirror": -0.685,
+   "dx_copy": 12.093,
+   "dy": 0.438
+  },
+  {
+   "ref": "R123",
+   "twin": "R223",
+   "dx_mirror": 0.179,
+   "dx_copy": -8.747,
+   "dy": -0.832
+  },
+  {
+   "ref": "R106",
+   "twin": "R206",
+   "dx_mirror": -0.03,
+   "dx_copy": -14.544,
+   "dy": -0.962
+  },
+  {
+   "ref": "Q104",
+   "twin": "Q204",
+   "dx_mirror": -0.746,
+   "dx_copy": 3.904,
+   "dy": 0.438
+  },
+  {
+   "ref": "R121",
+   "twin": "R221",
+   "dx_mirror": -0.304,
+   "dx_copy": 11.712,
+   "dy": 0.189
+  },
+  {
+   "ref": "R113",
+   "twin": "R213",
+   "dx_mirror": 0.237,
+   "dx_copy": -31.58,
+   "dy": -0.835
+  },
+  {
+   "ref": "R115",
+   "twin": "R215",
+   "dx_mirror": 0.498,
+   "dx_copy": -30.286,
+   "dy": -0.844
+  },
+  {
+   "ref": "RS102",
+   "twin": "RS202",
+   "dx_mirror": 0.11,
+   "dx_copy": -43.44,
+   "dy": -0.835
+  },
+  {
+   "ref": "C109",
+   "twin": "C209",
+   "dx_mirror": 3.125,
+   "dx_copy": 8.283,
+   "dy": 1.098
+  },
+  {
+   "ref": "J101",
+   "twin": "J201",
+   "dx_mirror": 0.254,
+   "dx_copy": -32.384,
+   "dy": 0.0
+  },
+  {
+   "ref": "R112",
+   "twin": "R212",
+   "dx_mirror": 0.498,
+   "dx_copy": -31.762,
+   "dy": 3.474
+  },
+  {
+   "ref": "R114",
+   "twin": "R214",
+   "dx_mirror": 0.498,
+   "dx_copy": -34.35,
+   "dy": -0.844
+  },
+  {
+   "ref": "R125",
+   "twin": "R225",
+   "dx_mirror": 1.71,
+   "dx_copy": -10.264,
+   "dy": -0.068
+  },
+  {
+   "ref": "J102",
+   "twin": "J202",
+   "dx_mirror": 0.254,
+   "dx_copy": -32.384,
+   "dy": 0.0
+  },
+  {
+   "ref": "C113",
+   "twin": "C213",
+   "dx_mirror": 0.071,
+   "dx_copy": 12.735,
+   "dy": -0.057
+  },
+  {
+   "ref": "C110",
+   "twin": "C210",
+   "dx_mirror": -0.574,
+   "dx_copy": 18.808,
+   "dy": 0.254
+  },
+  {
+   "ref": "C108",
+   "twin": "C208",
+   "dx_mirror": -4.419,
+   "dx_copy": 7.577,
+   "dy": 3.064
+  },
+  {
+   "ref": "R107",
+   "twin": "R207",
+   "dx_mirror": 2.046,
+   "dx_copy": -22.12,
+   "dy": 1.838
+  },
+  {
+   "ref": "C114",
+   "twin": "C214",
+   "dx_mirror": 0.061,
+   "dx_copy": 12.725,
+   "dy": -0.039
+  },
+  {
+   "ref": "R120",
+   "twin": "R220",
+   "dx_mirror": -0.873,
+   "dx_copy": 4.031,
+   "dy": 0.189
+  },
+  {
+   "ref": "C106",
+   "twin": "C206",
+   "dx_mirror": 0.188,
+   "dx_copy": -8.738,
+   "dy": -0.832
+  },
+  {
+   "ref": "R108",
+   "twin": "R208",
+   "dx_mirror": 0.566,
+   "dx_copy": -26.14,
+   "dy": -0.962
+  },
+  {
+   "ref": "R122",
+   "twin": "R222",
+   "dx_mirror": 0.237,
+   "dx_copy": -22.652,
+   "dy": -0.835
+  },
+  {
+   "ref": "R111",
+   "twin": "R211",
+   "dx_mirror": 0.188,
+   "dx_copy": -8.738,
+   "dy": -0.832
+  },
+  {
+   "ref": "R127",
+   "twin": "R227",
+   "dx_mirror": 0.202,
+   "dx_copy": -20.436,
+   "dy": 0.0
+  },
+  {
+   "ref": "C112",
+   "twin": "C212",
+   "dx_mirror": 0.491,
+   "dx_copy": -13.007,
+   "dy": -0.835
+  },
+  {
+   "ref": "R116",
+   "twin": "R216",
+   "dx_mirror": -4.406,
+   "dx_copy": 7.563,
+   "dy": -1.0
+  },
+  {
+   "ref": "C103",
+   "twin": "C203",
+   "dx_mirror": 0.254,
+   "dx_copy": -20.384,
+   "dy": -0.026
+  },
+  {
+   "ref": "R109",
+   "twin": "R209",
+   "dx_mirror": 0.379,
+   "dx_copy": -8.258,
+   "dy": -4.026
+  },
+  {
+   "ref": "C107",
+   "twin": "C207",
+   "dx_mirror": 0.498,
+   "dx_copy": -31.786,
+   "dy": -0.844
+  },
+  {
+   "ref": "R117",
+   "twin": "R217",
+   "dx_mirror": -0.431,
+   "dx_copy": 11.839,
+   "dy": 1.025
+  }
+ ],
+ "dangling_vias": [],
+ "dangling_tracks": [],
+ "unjustified_vias": [
+  {
+   "net": "/Bridge/SB",
+   "a": "via",
+   "b": "track",
+   "at": [
+    163.21,
+    107.86
+   ],
+   "to": [
+    167.9,
+    108.9
+   ],
+   "gap": 4.81,
+   "top_path": 6.96,
+   "limit": 7.81,
+   "vias": [
+    [
+     163.21,
+     107.86
+    ],
+    [
+     163.45,
+     100.81
+    ],
+    [
+     167.9,
+     108.9
+    ]
+   ],
+   "vias_a": [
+    [
+     163.21,
+     107.86
+    ]
+   ],
+   "vias_b": [
+    [
+     163.45,
+     100.81
+    ],
+    [
+     167.9,
+     108.9
+    ]
+   ]
+  }
+ ],
+ "unjustified_warnings": [
+  {
+   "net": "/Bridge/DRVA",
+   "a": "JP201.2",
+   "b": "C204.1",
+   "at": [
+    171.97,
+    108.96
+   ],
+   "to": [
+    171.08,
+    114.5
+   ],
+   "gap": 5.62,
+   "top_path": 6.07,
+   "limit": 8.62,
+   "vias": [],
+   "vias_a": [],
+   "vias_b": []
+  },
+  {
+   "net": "/Bridge/DRVB",
+   "a": "C205.2",
+   "b": "JP202.2",
+   "at": [
+    151.19,
+    114.5
+   ],
+   "to": [
+    150.63,
+    108.96
+   ],
+   "gap": 5.57,
+   "top_path": 6.22,
+   "limit": 8.57,
+   "vias": [],
+   "vias_a": [],
+   "vias_b": []
+  },
+  {
+   "net": "/Bridge/OB",
+   "a": "C207.2",
+   "b": "via",
+   "at": [
+    165.36,
+    97.74
+   ],
+   "to": [
+    171.35,
+    94.85
+   ],
+   "gap": 6.65,
+   "top_path": 8.56,
+   "limit": 9.97,
+   "vias": [
+    [
+     165.36,
+     97.74
+    ],
+    [
+     171.35,
+     94.85
+    ]
+   ],
+   "vias_a": [
+    [
+     165.36,
+     97.74
+    ]
+   ],
+   "vias_b": [
+    [
+     171.35,
+     94.85
+    ]
+   ]
+  },
+  {
+   "net": "REF",
+   "a": "C306.2",
+   "b": "via",
+   "at": [
+    133.86,
+    98.35
+   ],
+   "to": [
+    132.8,
+    99.5
+   ],
+   "gap": 1.56,
+   "top_path": 1.59,
+   "limit": 2.56,
+   "vias": [
+    [
+     133.86,
+     98.35
+    ],
+    [
+     132.8,
+     99.5
+    ]
+   ],
+   "vias_a": [
+    [
+     133.86,
+     98.35
+    ]
+   ],
+   "vias_b": [
+    [
+     132.8,
+     99.5
+    ]
+   ]
+  }
+ ],
+ "stats": {
+  "tracks": 494,
+  "vias": 108,
+  "length": {
+   "F.Cu": 649.5,
+   "In1.Cu": 0,
+   "In2.Cu": 524.2,
+   "In3.Cu": 0,
+   "In4.Cu": 37.9,
+   "B.Cu": 0
+  }
+ },
+ "krt_drc": [],
+ "krt_unconnected_extra": [],
+ "krt_zone_fill_only": [
+  "V+"
+ ]
+}
