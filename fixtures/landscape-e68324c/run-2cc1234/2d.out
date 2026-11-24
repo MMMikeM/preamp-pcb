@@ -1,0 +1,422 @@
+  $ /usr/local/bin/python3 /home/claude/preamp-pcb/drops.py /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb --supply --json /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/2d_drops.json
+44 vias added; 0 could not be placed
+  $ /usr/local/bin/python3 py_router/route_planes.py /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb.tmp --nets GND|V+|V- --plane-layers In4.Cu --skip-existing-zones --zone-clearance 0.2 --min-thickness 0.25 --no-thermal-vias --clearance 0.2 --board-edge-clearance 0.5 --hole-to-hole-clearance 0.25 --net-clearances /home/claude/preamp-pcb/net_clearances.json
+CMD: python3 py_router/route_planes.py /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb.tmp --nets "GND|V+|V-" --plane-layers In4.Cu --skip-existing-zones --zone-clearance 0.2 --min-thickness 0.25 --no-thermal-vias --clearance 0.2 --board-edge-clearance 0.5 --hole-to-hole-clearance 0.25 --net-clearances /home/claude/preamp-pcb/net_clearances.json
+ENV KNOBS: KICAD_FINALIZE_RIP=0 KICAD_RECONCILE_RIP_ESCALATION=0 KICAD_RIP_PREEXISTING=0
+--track-width not given; using the fallback 0.3mm.
+--via-size not given; using the fallback 0.5mm.
+--via-drill not given; using the fallback 0.3mm.
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!! NO .kicad_pro NEXT TO 'board.kicad_pcb' (#441)
+!!
+!! The sibling project carries the board's DRC floor. Without it this
+!! step resolves clearances from the STOCK netclass, which can be LOOSER
+!! than the copper already on the board:
+!!   - KiCad will then report phantom sub-clearance DRC on correct copper
+!!   - CLI and GUI runs will route DIFFERENT copper from this same board
+!!
+!! If this board was copied or renamed, bring its .kicad_pro along:
+!!   python3 py_router/copy_board.py src.kicad_pcb dst.kicad_pcb
+!! (Ignore only if this is a pristine board that has never been routed.)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+--clearance 0.2: the Default net class at it this run; other classes honoured (pass --clearance-ceiling to cap every class).
+Layer In4.Cu has multiple nets: GND, V+, V-
+Loaded per-net clearances for 14/93 nets from /home/claude/preamp-pcb/net_clearances.json
+Loading PCB from /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb...
+Found net 'GND' with ID 12
+Found net 'V+' with ID 14
+Found net 'V-' with ID 9
+Note: zone for 'GND' already exists on In4.Cu - keeping it (no new zone; thermal-array/--stitch-vias features still apply; pads are welded by the route step)
+Board bounds: (100.00, 80.00) to (174.00, 121.00)
+  Full-stack: appended 3 unrequested copper layer(s) as FORBIDDEN obstacles: In1.Cu, In2.Cu, In3.Cu
+  Layer costs: F.Cu=1.0x, In4.Cu=3.0x, B.Cu=3.0x, In1.Cu=-1x, In2.Cu=-1x, In3.Cu=-1x
+
+============================================================
+Processing net 'GND' on layer In4.Cu
+============================================================
+
+Pad analysis for net 'GND':
+  Through-hole pads (no via needed): 6
+  SMD pads on In4.Cu (no via needed): 0
+  SMD pads already routed to plane (no via needed): 29
+  SMD pads kept for thermal via arrays (via needed): 0
+
+Results for 'GND':
+  New vias placed: 0
+  Traces added: 0
+
+============================================================
+Processing net 'V+' on layer In4.Cu
+============================================================
+
+Pad analysis for net 'V+':
+  Through-hole pads (no via needed): 0
+  SMD pads on In4.Cu (no via needed): 0
+  SMD pads already routed to plane (no via needed): 19
+  SMD pads kept for thermal via arrays (via needed): 0
+
+Results for 'V+':
+  Zone on In4.Cu deferred (multi-net layer)
+  New vias placed: 0
+  Traces added: 0
+
+============================================================
+Processing net 'V-' on layer In4.Cu
+============================================================
+
+Pad analysis for net 'V-':
+  Through-hole pads (no via needed): 0
+  SMD pads on In4.Cu (no via needed): 0
+  SMD pads already routed to plane (no via needed): 14
+  SMD pads kept for thermal via arrays (via needed): 0
+
+Results for 'V-':
+  Zone on In4.Cu deferred (multi-net layer)
+  New vias placed: 0
+  Traces added: 0
+
+============================================================
+Computing zone boundaries for multi-net layer In4.Cu
+Nets: GND, V+, V-
+============================================================
+  Net 'GND': 29 vias
+  Net 'V+': 15 vias
+  Net 'V-': 9 vias
+  Net 'GND': 0 virtual via(s) and 6 pad(s) on In4.Cu join its spines
+  Spines keep 0.575 mm from another net's via (via radius + zone clearance + half the minimum width), no proximity cost
+  Net 'GND': MST with 34 edges between 35 vias
+  Net 'V+': MST with 14 edges between 15 vias
+  Net 'V-': MST with 8 edges between 9 vias
+    V+: all 14 MST edges routed
+    V-: 7/8 MST edges (1 failed)
+    GND: 31/34 MST edges (3 failed)
+  Retry 2: reordering with failed nets first: V-, GND
+    V-: all 8 MST edges routed
+    V+: 13/14 MST edges (1 failed)
+    GND: 28/34 MST edges (6 failed)
+  Retry 3: reordering with failed nets first: GND, V+
+    V+: all 14 MST edges routed
+    V-: 7/8 MST edges (1 failed)
+    GND: 31/34 MST edges (3 failed)
+  Retry 4: reordering with failed nets first: V-, GND
+    V-: all 8 MST edges routed
+    V+: 13/14 MST edges (1 failed)
+    GND: 28/34 MST edges (6 failed)
+  Retry 5: reordering with failed nets first: GND, V+
+    V+: all 14 MST edges routed
+    V-: 7/8 MST edges (1 failed)
+    GND: 31/34 MST edges (3 failed)
+  Best result: 4 failed edge(s)
+  Computing final Voronoi zones with 1515 seed points
+  'GND' has a plane on another layer too: it is this layer's sheet alone, out of the split
+  Spine split: 'GND' = background; the other 2 net(s) keep 804 of their 2920 mm^2 Voronoi share inside their islands and spines; parallel corridors run together for 1 net(s); finished on a 0.100 mm grid: 9 piece(s) nothing feeds, 73.2 mm^2 given to a neighbour that can feed it
+  Overlapping zones on In4.Cu: assigned fill priorities V-[0]=5, V-[1]=4, V+[0]=3, GND[1]=2, GND[0]=1
+  Creating zone 1/2 for 'V-' with 33 vertices
+  Creating zone 2/2 for 'V-' with 78 vertices
+  Creating zone for 'V+' with 119 vertices
+  Creating zone 1/2 for 'GND' with 4 vertices
+  Creating zone 2/2 for 'GND' with 18 vertices
+
+  Plane Resistance Analysis (0.43 oz copper, 10°C rise):
+  --------------------------------------------------------------------------
+  Net                       Path(mm)   AvgW(mm)   R(mΩ)      Imax(A)     
+  --------------------------------------------------------------------------
+  V-                        130.5      3.4        41.941     1.60        
+  V+                        75.4       5.9        14.102     2.37        
+  GND                       306.5      52.1       6.506      11.47*      
+  --------------------------------------------------------------------------
+  Path = longest MST route, AvgW = avg polygon width along path
+  Imax = IPC-2221 chart fit; inner layers carry 2221's 2x derating, which IPC-2152 overturned
+  * extrapolated past the IPC-2221 chart range (700 mils²) -- not a rating
+
+============================================================
+OVERALL TOTALS
+============================================================
+  Nets processed: 3
+  Total new vias placed: 0
+  Total traces added: 0
+
+Writing output to /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb.tmp...
+Output written to /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb.tmp
+Note: Open in KiCad and press 'B' to refill zones
+
+============================================================
+GEOMETRIC VERIFICATION (re-parsed output)
+============================================================
+  GND: 35/35 pads connected to plane on In4.Cu
+  V+: 18/19 pads connected to plane on In4.Cu
+      unconnected pad R110 on 'V+' at (106.78, 107.58) [F.Cu]
+  V-: 9/14 pads connected to plane on In4.Cu
+      unconnected pad C302 on 'V-' at (122.12, 85.63) [F.Cu]
+      unconnected pad C310 on 'V-' at (106.87, 92.52) [F.Cu]
+      unconnected pad U3 on 'V-' at (109.32, 92.53) [F.Cu]
+      unconnected pad U1 on 'V-' at (109.32, 106.33) [F.Cu]
+      unconnected pad Q303 on 'V-' at (124.03, 85.63) [F.Cu]
+
+  6 pad(s) are not connected to their plane by the pour alone -- EXPECTED (#562): the plane step places no taps. They are welded during the route step's normal routing (pour-launch); its in-run finalize then verifies against KiCad's exact fill and repairs any residue. Grade the board AFTER the route step, not here (see per-net breakdown above).
+  Bare pour (no track or via drawn): writing the copper clearance only -- no size or copper-to-hole floor (#1319)
+  DRC settings: wrote 1 value(s) to /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb.kicad_pro to match the routed floors (close+reopen in KiCad if it is open). WRITES, not changes: a key the project never declared counts here, and one logical value is written once per net class:
+      rules.min_via_annular_width: None -> 0.15 mm
+PROJECT_WRITES_JSON: {"project": "/tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb.kicad_pro", "writes": ["rules.min_via_annular_width: None -> 0.15 mm"]}
+JSON_SUMMARY: {"complete": true, "env_knobs": {"KICAD_FINALIZE_RIP": "0", "KICAD_RECONCILE_RIP_ESCALATION": "0", "KICAD_RIP_PREEXISTING": "0"}, "min_clearance_used": 0.2, "pads": {"failed_pads": 0, "geometric_failed": 6, "pads_needing_vias": 0}, "pads_scope": "all zones in this run, summed -- not per zone; see plane_zones for what was poured", "plane_nets": ["GND", "V+", "V-"], "plane_resistance": [{"avg_width_mm": 52.077, "copper_oz": 0.43428571428571433, "max_current_a": 11.47, "max_current_ipc2152_a": 22.94, "net": "GND", "path_basis": "route", "path_length_mm": 306.53, "resistance_ohms": 0.006506, "temp_rise_c": 10.0}, {"avg_width_mm": 5.909, "copper_oz": 0.43428571428571433, "max_current_a": 2.37, "max_current_ipc2152_a": 4.74, "net": "V+", "path_basis": "route", "path_length_mm": 75.4, "resistance_ohms": 0.014102, "temp_rise_c": 10.0}, {"avg_width_mm": 3.439, "copper_oz": 0.43428571428571433, "max_current_a": 1.6, "max_current_ipc2152_a": 3.2, "net": "V-", "path_basis": "route", "path_length_mm": 130.49, "resistance_ohms": 0.041941, "temp_rise_c": 10.0}], "plane_zones": [{"layer": "In4.Cu", "net": "GND|V+|V-"}], "status": "ok"}
+EXIT=0
+  $ /usr/local/bin/python3 -u py_router/route.py /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb.tmp --nets /BAT+ /BAT- --layers In4.Cu --grid-step 0.05 --heuristic-weight 1.0 --same-net-pad-clearance 0.15 --fab-tier standard --escalation off --clearance 0.2 --board-edge-clearance 0.5 --hole-to-hole-clearance 0.25 --net-clearances /home/claude/preamp-pcb/net_clearances.json --keep-input-copper --direction-preference-cost 0 --via-cost 100000 --track-width 0.5
+CMD: python3 -u py_router/route.py /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb.tmp --nets /BAT+ /BAT- --layers In4.Cu --grid-step 0.05 --heuristic-weight 1.0 --same-net-pad-clearance 0.15 --fab-tier standard --escalation off --clearance 0.2 --board-edge-clearance 0.5 --hole-to-hole-clearance 0.25 --net-clearances /home/claude/preamp-pcb/net_clearances.json --keep-input-copper --direction-preference-cost 0 --via-cost 100000 --track-width 0.5
+ENV KNOBS: KICAD_FINALIZE_RIP=0 KICAD_RECONCILE_RIP_ESCALATION=0 KICAD_RIP_PREEXISTING=0
+--via-size not given; using the fallback 0.5mm.
+--via-drill not given; using the fallback 0.3mm.
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!! NO .kicad_pro NEXT TO 'board.kicad_pcb' (#441)
+!!
+!! The sibling project carries the board's DRC floor. Without it this
+!! step resolves clearances from the STOCK netclass, which can be LOOSER
+!! than the copper already on the board:
+!!   - KiCad will then report phantom sub-clearance DRC on correct copper
+!!   - CLI and GUI runs will route DIFFERENT copper from this same board
+!!
+!! If this board was copied or renamed, bring its .kicad_pro along:
+!!   python3 py_router/copy_board.py src.kicad_pcb dst.kicad_pcb
+!! (Ignore only if this is a pristine board that has never been routed.)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+--clearance 0.2: the Default net class routes at it this run; other classes are honoured (pass --clearance-ceiling to cap every class).
+Loading /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb to expand net patterns...
+Routing 2 nets: ['/BAT+', '/BAT-']
+Loaded per-net clearances for 14/93 nets from /home/claude/preamp-pcb/net_clearances.json
+Loading /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb...
+Using 1 routing layers: ['In4.Cu']
+  Full-stack: appended 5 unrequested copper layer(s) as FORBIDDEN obstacles (no routing, vias respect their copper): F.Cu, In1.Cu, In2.Cu, In3.Cu, B.Cu
+  Layer costs: In4.Cu=3.0x, F.Cu=-1x, In1.Cu=-1x, In2.Cu=-1x, In3.Cu=-1x, B.Cu=-1x
+No BGA components detected - no exclusion zones needed
+Same-net pad via clearance 0.15mm (from flag, #581): vias stay off same-net pads
+
+Analyzing layer swaps for 1 multi-point net(s) spanning layers...
+  No common layer found for 1 multi-point net(s) (left as-is)
+
+Using MPS ordering strategy...
+MPS: Using segment intersection method (no nets on BGA chips)
+MPS: 2 nets with 0 crossing conflicts detected
+MPS Round 1: 2 units: /BAT+, /BAT-
+
+Routing 2 single-ended net(s)...
+============================================================
+Building base obstacle map...
+Pour guard (#1260): GND pour on B.Cu: islands left crossable -- 1 hold a routed net's terminal
+Pour guard (#1260): GND pour on In1.Cu: islands left crossable -- 1 hold a routed net's terminal
+Pour guard (#1260): GND pour on In3.Cu: islands left crossable -- 1 hold a routed net's terminal
+Pour guard (#1260): GND pour on In4.Cu: islands left crossable -- 1 hold a routed net's terminal
+Pour guard (#1260): V+ pour on In4.Cu is outside this run's nets, and no routed net has a pad inside 1 of its island(s) (459.9 mm^2) -- blocked, so no track cuts them (KICAD_POUR_GUARD=0 reverts)
+Pour guard (#1260): V- pour on In4.Cu is outside this run's nets, and no routed net has a pad inside 2 of its island(s) (344.0 mm^2) -- blocked, so no track cuts them (KICAD_POUR_GUARD=0 reverts)
+Pour guard (#1260): no exact fill (no python with pcbnew found; set KICAD_PYTHON to KiCad's bundled interpreter); blocking the zone OUTLINES, which cover more than the fill
+Base obstacle map built in 0.54s
+Found 93 unrouted nets in PCB for stub proximity
+Pre-computing net obstacle cache...
+Net obstacle cache built in 0.24s (93 nets)
+Plane fragility: exact fill unavailable (no python with pcbnew found; set KICAD_PYTHON to KiCad's bundled interpreter); using zone outlines
+Plane fragility field: 635550 cells near the edges of 6 pour(s) (KICAD_PLANE_FRAGILITY_COST=2.0mm-equiv, DYNAMIC #466 (=0 via KICAD_PLANE_FRAGILITY_DYNAMIC reverts))
+History congestion (#590) armed: +0.1mm-equiv per contest, cap 0.5, escalate 0.0, rip weight 1.0 (radius +0.25mm), frontier weight 0.25
+
+[1/2] Routing /BAT+ (id=48)
+  SUCCESS: 6 segments, 0 vias, 3950 iterations, length=11.29mm (stubs=2.34mm) (0.04s)
+
+[2/2] Routing /BAT- (id=49)
+  Detected multi-point net with 3 pads (Phase 1: main route only)
+  Multi-point net Phase 1: routing longest MST edge (pads 1 and 2, length=12.15mm)
+  Phase 1 routed in 15021 iterations, 5 segments
+  SUCCESS: 5 segments, 0 vias, 15021 iterations, length=14.18mm (stubs=4.67mm) (0.03s)
+
+Sync pcb_data: 292 -> 281 (kept stubs) -> 292 (after adding 11)
+
+============================================================
+Multi-point Phase 3: Routing 1 tap connections
+============================================================
+
+/BAT- (net 49):
+  Multi-point net Phase 3: routing 1 remaining MST edges (longest first)
+    [1/1] Routing MST edge: pad 1 -> pad 0 (length=10.37mm) target=(128.24, 84.72)
+      Routed in 16454 iterations (0.01s)
+  Phase 3 routing complete: 1 edges, 10 total segments, 0 total vias
+  Added 5 tap segments, 0 tap vias
+  Net total time: 0.10s, 31475 iterations
+Cycle prune: removed 5 redundant loop segment(s) across 2 net(s)
+Octolinear smoothing: collapsed 2 staircase span(s) on 2 net(s), -0.25 mm of copper (#536)
+
+============================================================
+Routing complete
+============================================================
+  Single-ended:  2/2 routed
+  Multi-point:   5/5 pads connected (1 nets)
+  Total vias:    0
+  Search time:   0.07s (net search only, not the whole run)
+  Iterations:    18,971
+  Fragility refresh (#466): 4 windows, 0.07s total
+JSON_SUMMARY: {"routed_single": ["/BAT+", "/BAT-"], "failed_single": [], "open_single": [], "failed_multipoint": [], "multipoint_nets": 1, "multipoint_pads_connected": 5, "multipoint_pads_total": 5, "multipoint_edges_routed": 2, "multipoint_edges_failed": 0, "ripup_success_pairs": [], "rerouted_pairs": [], "single_ended_target_swaps": [], "layer_swaps": 0, "successful": 2, "failed": 0, "total_time": 0.07, "total_iterations": 18971, "total_vias": 0, "cleanup_disconnected": [], "min_clearance_used": 0.2, "design_rules": {"escalation_policy": "off", "fab_tier": "standard", "board_floors": {}, "count": 0, "nets": [], "narrowed": [], "min_delivered": {}, "fab_tier_escalations": 0, "fab_tier_contexts": [], "fab_tier_target": "advanced", "unsupported_rules": []}, "plane_fragility": {"source": "zone_outlines", "islands": 0, "refill_status": "no_kicad_python", "why": "no python with pcbnew found; set KICAD_PYTHON to KiCad's bundled interpreter", "machine_dependent": false}, "pour_guard": {"source": "zone_outlines", "why": "no python with pcbnew found; set KICAD_PYTHON to KiCad's bundled interpreter", "pours": [{"net": "GND", "layer": "B.Cu", "blocked_islands": 0, "blocked_mm2": 0, "crossable_islands": 1, "minor_islands": 0}, {"net": "GND", "layer": "In1.Cu", "blocked_islands": 0, "blocked_mm2": 0, "crossable_islands": 1, "minor_islands": 0}, {"net": "GND", "layer": "In3.Cu", "blocked_islands": 0, "blocked_mm2": 0, "crossable_islands": 1, "minor_islands": 0}, {"net": "GND", "layer": "In4.Cu", "blocked_islands": 0, "blocked_mm2": 0, "crossable_islands": 1, "minor_islands": 0}, {"net": "V+", "layer": "In4.Cu", "blocked_islands": 1, "blocked_mm2": 459.9, "crossable_islands": 0, "minor_islands": 0}, {"net": "V-", "layer": "In4.Cu", "blocked_islands": 2, "blocked_mm2": 344.0, "crossable_islands": 0, "minor_islands": 0}]}, "oracle_check": "disabled", "pad_pairs_connected": 6, "pad_pairs_total": 6, "scope": "run", "env_knobs": {"KICAD_FINALIZE_RIP": "0", "KICAD_RECONCILE_RIP_ESCALATION": "0", "KICAD_RIP_PREEXISTING": "0"}}
+
+Writing output to /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb.tmp...
+Successfully wrote /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb.tmp
+  Plane finalize: zone net(s) GND, V+, V- are OUTSIDE this route's --nets scope -- excluded from the finalize BY PLAN. Since #562 a pour alone connects nothing: unless a later route step covers these nets, their pads ship disconnected.
+  Strict collapse (#1063, end of run): removed 1 redundant segment(s) on 1 net(s)
+
+  FAB NOTE (route): 73 via(s) in a pad or paste opening [C103.2 F.Paste (pad), C109.2 F.Paste (pad), C110.2 F.Paste (pad), C203.2 F.Paste (pad), C209.2 F.Paste (pad), C210.2 F.Paste (pad), C301.1 F.Paste (pad), C301.2 F.Paste (pad), +65 more] -- 0 stamped (capping yes) (filling yes), 73 already filled+capped. via-in-pad requires IPC-4761 Type VII (filled + capped + plated); state it on the fab drawing or solder wicks into the barrel.
+VIA_IN_PAD_JSON: {"count": 73, "sites": ["C103.2 F.Paste (pad)", "C109.2 F.Paste (pad)", "C110.2 F.Paste (pad)", "C203.2 F.Paste (pad)", "C209.2 F.Paste (pad)", "C210.2 F.Paste (pad)", "C301.1 F.Paste (pad)", "C301.2 F.Paste (pad)", "C302.1 F.Paste (pad)", "C302.2 F.Paste (pad)", "C303.1 F.Paste (pad)", "C304.1 F.Paste (pad)", "C304.2 F.Paste (pad)", "C305.1 F.Paste (pad)", "C305.2 F.Paste (pad)", "C306.1 F.Paste (pad)", "C306.2 F.Paste (pad)", "C307.1 F.Paste (pad)", "C307.2 F.Paste (pad)", "C308.1 F.Paste (pad)", "C308.2 F.Paste (pad)", "C309.1 F.Paste (pad)", "C309.2 F.Paste (pad)", "C310.1 F.Paste (pad)", "C310.2 F.Paste (pad)", "C311.1 F.Paste (pad)", "C311.2 F.Paste (pad)", "C312.1 F.Paste (pad)", "C312.2 F.Paste (pad)", "Q101.1 F.Paste (pad)", "Q102.1 F.Paste (pad)", "Q104.1 F.Paste (pad)", "Q201.1 F.Paste (pad)", "Q202.1 F.Paste (pad)", "Q204.1 F.Paste (pad)", "Q305.3 F.Paste (pad)", "R105.2 F.Paste (pad)", "R109.1 F.Paste (pad)", "R110.1 F.Paste (pad)", "R113.2 F.Paste (pad)", "R118.2 F.Paste (pad)", "R119.1 F.Paste (pad)", "R122.2 F.Paste (pad)", "R126.2 F.Paste (pad)", "R205.2 F.Paste (pad)", "R209.1 F.Paste (pad)", "R210.1 F.Paste (pad)", "R213.2 F.Paste (pad)", "R218.2 F.Paste (pad)", "R219.1 F.Paste (pad)", "R222.2 F.Paste (pad)", "R226.2 F.Paste (pad)", "R301.1 F.Paste (pad)", "R304.2 F.Paste (pad)", "R306.2 F.Paste (pad)", "R307.1 F.Paste (pad)", "R312.2 F.Paste (pad)", "U1.3 F.Paste (pad)", "U1.7 F.Paste (pad)", "U2.7 F.Paste (pad)", "U3.10 F.Paste (pad)", "U3.12 F.Paste (pad)", "U3.3 F.Paste (pad)", "U3.5 F.Paste (pad)", "U4.10 F.Paste (pad)", "U4.11 F.Paste (pad)", "U4.12 F.Paste (pad)", "U4.3 F.Paste (pad)", "U4.4 F.Paste (pad)", "U4.5 F.Paste (pad)", "U5.1 F.Paste (pad)", "U6.10 F.Paste (pad)", "U6.5 F.Paste (pad)"], "stamped": 0, "restored": 0, "protected": 73, "unstampable": 0, "site_created": 0, "unprotected": [], "note": "via-in-pad requires IPC-4761 Type VII (filled + capped + plated); state it on the fab drawing or solder wicks into the barrel"}
+  Pours graded on the fill model: no KiCad refill (no python with pcbnew found; set KICAD_PYTHON to KiCad's bundled interpreter)
+JSON_REGRADE: {"board": "file", "graded_nets": 2, "seconds": 0.18, "routed_single": ["/BAT+", "/BAT-"], "failed_single": [], "open_single": [], "failed_multipoint": [], "multipoint_pads_total": 8, "multipoint_pads_connected": 8, "successful": 2, "failed": 0, "unowned_broken": [], "recovered": [], "pad_pairs": {}, "broken_by_run": [], "pour_fill": {"graded_on": "fill_model", "why": "no python with pcbnew found; set KICAD_PYTHON to KiCad's bundled interpreter"}}
+
+============================================================
+Run complete -- whole run, re-graded on the written board (2 net(s), 0.2s)
+============================================================
+  Single-ended:  2/2 routed
+  Multi-point:   8/8 pads connected
+JSON_IMPROVEMENT_GATE: {"lost": [], "gained": ["/BAT+", "/BAT-"], "lost_zone": [], "gained_zone": [], "worsened": [], "fragmented": [], "disconnected_pads_before": 65, "disconnected_pads_after": 59, "joins_needed_before": 57, "joins_needed_after": 54, "joins_compared": 93, "nets_compared": 93, "verdict": "accept"}
+JSON_SUMMARY_MIN: {"escalations": 0, "failed": 0, "failed_single": [], "finalize_excluded_nets": ["GND", "V+", "V-"], "main_loop_time_s": 0.07, "min_clearance_used": 0.2, "multipoint_deficit": 0, "open_single": [], "pad_pairs_open": {"count": 0, "nets": []}, "regraded_nets": 2, "routed": 2, "scope": "merged", "terminal_restores_broken": [], "vias": 0}
+  DRC settings already consistent (/tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb.kicad_pro)
+  Route-step trade recorded for the next step's gate: lost 0, gained 2 (accept)
+Wall time: 6.8s (whole run)
+EXIT=0
+  $ /usr/local/bin/python3 -u py_router/route.py /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb.tmp --nets /VR PB REF --layers In2.Cu In4.Cu --grid-step 0.05 --heuristic-weight 1.0 --same-net-pad-clearance 0.15 --fab-tier standard --escalation off --clearance 0.2 --board-edge-clearance 0.5 --hole-to-hole-clearance 0.25 --net-clearances /home/claude/preamp-pcb/net_clearances.json --keep-input-copper --direction-preference-cost 0 --layer-costs 1.0 1.0 --via-cost 40 --track-width 0.4 --direction-preference-cost 1000
+CMD: python3 -u py_router/route.py /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb.tmp --nets /VR PB REF --layers In2.Cu In4.Cu --grid-step 0.05 --heuristic-weight 1.0 --same-net-pad-clearance 0.15 --fab-tier standard --escalation off --clearance 0.2 --board-edge-clearance 0.5 --hole-to-hole-clearance 0.25 --net-clearances /home/claude/preamp-pcb/net_clearances.json --keep-input-copper --direction-preference-cost 0 --layer-costs 1.0 1.0 --via-cost 40 --track-width 0.4 --direction-preference-cost 1000
+ENV KNOBS: KICAD_FINALIZE_RIP=0 KICAD_RECONCILE_RIP_ESCALATION=0 KICAD_RIP_PREEXISTING=0
+--via-size not given; using the fallback 0.5mm.
+--via-drill not given; using the fallback 0.3mm.
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!! NO .kicad_pro NEXT TO 'board.kicad_pcb' (#441)
+!!
+!! The sibling project carries the board's DRC floor. Without it this
+!! step resolves clearances from the STOCK netclass, which can be LOOSER
+!! than the copper already on the board:
+!!   - KiCad will then report phantom sub-clearance DRC on correct copper
+!!   - CLI and GUI runs will route DIFFERENT copper from this same board
+!!
+!! If this board was copied or renamed, bring its .kicad_pro along:
+!!   python3 py_router/copy_board.py src.kicad_pcb dst.kicad_pcb
+!! (Ignore only if this is a pristine board that has never been routed.)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+--clearance 0.2: the Default net class routes at it this run; other classes are honoured (pass --clearance-ceiling to cap every class).
+Loading /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb to expand net patterns...
+Routing 3 nets: ['/VR', 'PB', 'REF']
+Loaded per-net clearances for 14/93 nets from /home/claude/preamp-pcb/net_clearances.json
+Loading /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb...
+Using 2 routing layers: ['In2.Cu', 'In4.Cu']
+  Full-stack: appended 4 unrequested copper layer(s) as FORBIDDEN obstacles (no routing, vias respect their copper): F.Cu, In1.Cu, In3.Cu, B.Cu
+  Layer costs: In2.Cu=1.0x, In4.Cu=1.0x, F.Cu=-1x, In1.Cu=-1x, In3.Cu=-1x, B.Cu=-1x
+No BGA components detected - no exclusion zones needed
+Same-net pad via clearance 0.15mm (from flag, #581): vias stay off same-net pads
+
+Using MPS ordering strategy...
+MPS: Using segment intersection method (no nets on BGA chips)
+MPS: 3 nets with 2 crossing conflicts detected
+MPS Round 1: 2 units: PB, /VR
+MPS Round 2: 1 units: REF
+
+Routing 3 single-ended net(s)...
+============================================================
+Building base obstacle map...
+Pour guard (#1260): GND pour on B.Cu: islands left crossable -- 1 hold a routed net's terminal
+Pour guard (#1260): GND pour on In1.Cu: islands left crossable -- 1 hold a routed net's terminal
+Pour guard (#1260): GND pour on In3.Cu: islands left crossable -- 1 hold a routed net's terminal
+Pour guard (#1260): GND pour on In4.Cu: islands left crossable -- 1 hold a routed net's terminal
+Pour guard (#1260): V+ pour on In4.Cu: islands left crossable -- 1 hold a routed net's terminal
+Pour guard (#1260): V- pour on In4.Cu: islands left crossable -- 2 hold a routed net's terminal
+Base obstacle map built in 0.54s
+Found 93 unrouted nets in PCB for stub proximity
+Pre-computing net obstacle cache...
+Net obstacle cache built in 0.26s (93 nets)
+Plane fragility: exact fill unavailable (no python with pcbnew found; set KICAD_PYTHON to KiCad's bundled interpreter); using zone outlines
+Plane fragility field: 635550 cells near the edges of 6 pour(s) (KICAD_PLANE_FRAGILITY_COST=2.0mm-equiv, DYNAMIC #466 (=0 via KICAD_PLANE_FRAGILITY_DYNAMIC reverts))
+History congestion (#590) armed: +0.1mm-equiv per contest, cap 0.5, escalate 0.0, rip weight 1.0 (radius +0.25mm), frontier weight 0.25
+
+[1/3] Routing PB (id=10)
+  Detected multi-point net with 7 pads (Phase 1: main route only)
+  Multi-point net Phase 1: routing longest MST edge (pads 2 and 3, length=22.05mm)
+  Phase 1 routed in 207886 iterations, 5 segments
+  SUCCESS: 5 segments, 0 vias, 207886 iterations, length=27.98mm (stubs=9.04mm) (0.15s)
+
+[2/3] Routing /VR (id=8)
+  SUCCESS: 4 segments, 0 vias, 68712 iterations, length=11.46mm (stubs=1.88mm) (0.05s)
+
+[3/3] Routing REF (id=3)
+  Detected multi-point net with 8 pads (Phase 1: main route only)
+  Multi-point net Phase 1: routing longest MST edge (pads 3 and 6, length=29.35mm)
+  Phase 1 routed in 133722 iterations, 10 segments
+  SUCCESS: 10 segments, 0 vias, 133722 iterations, length=31.98mm (stubs=4.15mm) (0.08s)
+
+Sync pcb_data: 304 -> 287 (kept stubs) -> 304 (after adding 17)
+
+============================================================
+Multi-point Phase 3: Routing 11 tap connections
+============================================================
+
+PB (net 10):
+  Multi-point net Phase 3: routing 5 remaining MST edges (longest first)
+    [1/11] Routing MST edge: pad 2 -> pad 1 (length=19.42mm) target=(118.43, 107.27)
+      Routed in 380347 iterations (0.16s)
+    [2/11] Routing MST edge: pad 1 -> pad 0 (length=17.02mm) target=(104.93, 103.75)
+      Routed in 49186 iterations (0.02s)
+    [3/11] Routing MST edge: pad 3 -> pad 4 (length=14.42mm) target=(149.35, 93.02)
+      Routed in 58508 iterations (0.02s)
+    [4/11] Routing MST edge: pad 4 -> pad 5 (length=16.68mm) target=(155.19, 103.86)
+      Routed in 271091 iterations (0.11s)
+    [5/11] Routing MST edge: pad 5 -> pad 6 (length=15.66mm) target=(169.07, 105.65)
+      Routed in 34983 iterations (0.01s)
+  Phase 3 routing complete: 5 edges, 25 total segments, 2 total vias
+  Added 21 tap segments, 2 tap vias
+  Net total time: 0.47s, 1002001 iterations
+
+REF (net 3):
+  Multi-point net Phase 3: routing 6 remaining MST edges (longest first)
+    [6/11] Routing MST edge: pad 3 -> pad 2 (length=24.14mm) target=(114.27, 93.80)
+      Routed in 218790 iterations (0.11s)
+    [7/11] Routing MST edge: pad 3 -> pad 4 (length=21.45mm) target=(135.80, 117.85)
+      Routed in 372946 iterations (0.17s)
+    [8/11] Routing MST edge: pad 2 -> pad 0 (length=4.95mm) target=(109.32, 93.80)
+      Routed in 1068 iterations (0.00s)
+    [9/11] Routing MST edge: pad 6 -> pad 7 (length=4.95mm) target=(164.45, 94.64)
+      Routed in 100 iterations (0.00s)
+    [10/11] Routing MST edge: pad 6 -> pad 5 (length=2.54mm) target=(159.50, 92.09)
+      Routed in 18690 iterations (0.01s)
+    [11/11] Routing MST edge: pad 2 -> pad 1 (length=2.54mm) target=(114.27, 91.26)
+      Routed in 577 iterations (0.00s)
+  Phase 3 routing complete: 6 edges, 38 total segments, 2 total vias
+  Added 29 tap segments, 2 tap vias
+  Net total time: 0.48s, 745893 iterations
+Closed 1 stub gap(s) to same-net copper
+Cycle prune: removed 17 redundant loop segment(s) across 3 net(s)
+Octolinear smoothing: collapsed 6 staircase span(s) on 2 net(s), -0.00 mm of copper (#536)
+
+============================================================
+Routing complete
+============================================================
+  Single-ended:  3/3 routed
+  Multi-point:   21/21 pads connected (2 nets)
+  Total vias:    4
+  Search time:   0.28s (net search only, not the whole run)
+  Iterations:    410,320
+  Fragility refresh (#466): 2 windows, 0.11s total
+JSON_SUMMARY: {"routed_single": ["PB", "/VR", "REF"], "failed_single": [], "open_single": [], "failed_multipoint": [], "multipoint_nets": 2, "multipoint_pads_connected": 21, "multipoint_pads_total": 21, "multipoint_edges_routed": 13, "multipoint_edges_failed": 0, "ripup_success_pairs": [], "rerouted_pairs": [], "single_ended_target_swaps": [], "layer_swaps": 0, "successful": 3, "failed": 0, "total_time": 0.28, "total_iterations": 410320, "total_vias": 4, "cleanup_disconnected": [], "min_clearance_used": 0.2, "design_rules": {"escalation_policy": "off", "fab_tier": "standard", "board_floors": {}, "count": 0, "nets": [], "narrowed": [], "min_delivered": {}, "fab_tier_escalations": 0, "fab_tier_contexts": [], "fab_tier_target": "advanced", "unsupported_rules": []}, "plane_fragility": {"source": "zone_outlines", "islands": 0, "refill_status": "no_kicad_python", "why": "no python with pcbnew found; set KICAD_PYTHON to KiCad's bundled interpreter", "machine_dependent": false}, "pour_guard": {"source": "zone_outlines", "why": "no python with pcbnew found; set KICAD_PYTHON to KiCad's bundled interpreter", "pours": [{"net": "GND", "layer": "B.Cu", "blocked_islands": 0, "blocked_mm2": 0, "crossable_islands": 1, "minor_islands": 0}, {"net": "GND", "layer": "In1.Cu", "blocked_islands": 0, "blocked_mm2": 0, "crossable_islands": 1, "minor_islands": 0}, {"net": "GND", "layer": "In3.Cu", "blocked_islands": 0, "blocked_mm2": 0, "crossable_islands": 1, "minor_islands": 0}, {"net": "GND", "layer": "In4.Cu", "blocked_islands": 0, "blocked_mm2": 0, "crossable_islands": 1, "minor_islands": 0}, {"net": "V+", "layer": "In4.Cu", "blocked_islands": 0, "blocked_mm2": 0, "crossable_islands": 1, "minor_islands": 0}, {"net": "V-", "layer": "In4.Cu", "blocked_islands": 0, "blocked_mm2": 0, "crossable_islands": 2, "minor_islands": 0}]}, "oracle_check": "disabled", "pad_pairs_connected": 21, "pad_pairs_total": 21, "scope": "run", "env_knobs": {"KICAD_FINALIZE_RIP": "0", "KICAD_RECONCILE_RIP_ESCALATION": "0", "KICAD_RIP_PREEXISTING": "0"}}
+
+Writing output to /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb.tmp...
+Successfully wrote /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb.tmp
+  Plane finalize: zone net(s) GND, V+, V- are OUTSIDE this route's --nets scope -- excluded from the finalize BY PLAN. Since #562 a pour alone connects nothing: unless a later route step covers these nets, their pads ship disconnected.
+  Strict collapse (#1063, end of run): removed 1 redundant segment(s) on 1 net(s)
+
+  FAB NOTE (route): 73 via(s) in a pad or paste opening [C103.2 F.Paste (pad), C109.2 F.Paste (pad), C110.2 F.Paste (pad), C203.2 F.Paste (pad), C209.2 F.Paste (pad), C210.2 F.Paste (pad), C301.1 F.Paste (pad), C301.2 F.Paste (pad), +65 more] -- 0 stamped (capping yes) (filling yes), 73 already filled+capped. via-in-pad requires IPC-4761 Type VII (filled + capped + plated); state it on the fab drawing or solder wicks into the barrel.
+VIA_IN_PAD_JSON: {"count": 73, "sites": ["C103.2 F.Paste (pad)", "C109.2 F.Paste (pad)", "C110.2 F.Paste (pad)", "C203.2 F.Paste (pad)", "C209.2 F.Paste (pad)", "C210.2 F.Paste (pad)", "C301.1 F.Paste (pad)", "C301.2 F.Paste (pad)", "C302.1 F.Paste (pad)", "C302.2 F.Paste (pad)", "C303.1 F.Paste (pad)", "C304.1 F.Paste (pad)", "C304.2 F.Paste (pad)", "C305.1 F.Paste (pad)", "C305.2 F.Paste (pad)", "C306.1 F.Paste (pad)", "C306.2 F.Paste (pad)", "C307.1 F.Paste (pad)", "C307.2 F.Paste (pad)", "C308.1 F.Paste (pad)", "C308.2 F.Paste (pad)", "C309.1 F.Paste (pad)", "C309.2 F.Paste (pad)", "C310.1 F.Paste (pad)", "C310.2 F.Paste (pad)", "C311.1 F.Paste (pad)", "C311.2 F.Paste (pad)", "C312.1 F.Paste (pad)", "C312.2 F.Paste (pad)", "Q101.1 F.Paste (pad)", "Q102.1 F.Paste (pad)", "Q104.1 F.Paste (pad)", "Q201.1 F.Paste (pad)", "Q202.1 F.Paste (pad)", "Q204.1 F.Paste (pad)", "Q305.3 F.Paste (pad)", "R105.2 F.Paste (pad)", "R109.1 F.Paste (pad)", "R110.1 F.Paste (pad)", "R113.2 F.Paste (pad)", "R118.2 F.Paste (pad)", "R119.1 F.Paste (pad)", "R122.2 F.Paste (pad)", "R126.2 F.Paste (pad)", "R205.2 F.Paste (pad)", "R209.1 F.Paste (pad)", "R210.1 F.Paste (pad)", "R213.2 F.Paste (pad)", "R218.2 F.Paste (pad)", "R219.1 F.Paste (pad)", "R222.2 F.Paste (pad)", "R226.2 F.Paste (pad)", "R301.1 F.Paste (pad)", "R304.2 F.Paste (pad)", "R306.2 F.Paste (pad)", "R307.1 F.Paste (pad)", "R312.2 F.Paste (pad)", "U1.3 F.Paste (pad)", "U1.7 F.Paste (pad)", "U2.7 F.Paste (pad)", "U3.10 F.Paste (pad)", "U3.12 F.Paste (pad)", "U3.3 F.Paste (pad)", "U3.5 F.Paste (pad)", "U4.10 F.Paste (pad)", "U4.11 F.Paste (pad)", "U4.12 F.Paste (pad)", "U4.3 F.Paste (pad)", "U4.4 F.Paste (pad)", "U4.5 F.Paste (pad)", "U5.1 F.Paste (pad)", "U6.10 F.Paste (pad)", "U6.5 F.Paste (pad)"], "stamped": 0, "restored": 0, "protected": 73, "unstampable": 0, "site_created": 0, "unprotected": [], "note": "via-in-pad requires IPC-4761 Type VII (filled + capped + plated); state it on the fab drawing or solder wicks into the barrel"}
+  Pours graded on the fill model: no KiCad refill (no python with pcbnew found; set KICAD_PYTHON to KiCad's bundled interpreter)
+JSON_REGRADE: {"board": "file", "graded_nets": 3, "seconds": 0.16, "routed_single": ["PB", "/VR", "REF"], "failed_single": [], "open_single": [], "failed_multipoint": [], "multipoint_pads_total": 24, "multipoint_pads_connected": 24, "successful": 3, "failed": 0, "unowned_broken": [], "recovered": [], "pad_pairs": {}, "broken_by_run": [], "pour_fill": {"graded_on": "fill_model", "why": "no python with pcbnew found; set KICAD_PYTHON to KiCad's bundled interpreter"}}
+
+============================================================
+Run complete -- whole run, re-graded on the written board (3 net(s), 0.2s)
+============================================================
+  Single-ended:  3/3 routed
+  Multi-point:   24/24 pads connected
+JSON_IMPROVEMENT_GATE: {"lost": [], "gained": ["/VR", "PB", "REF"], "lost_zone": [], "gained_zone": [], "worsened": [], "fragmented": [], "disconnected_pads_before": 59, "disconnected_pads_after": 45, "joins_needed_before": 54, "joins_needed_after": 40, "joins_compared": 93, "nets_compared": 93, "verdict": "accept"}
+JSON_SUMMARY_MIN: {"escalations": 0, "failed": 0, "failed_single": [], "finalize_excluded_nets": ["GND", "V+", "V-"], "main_loop_time_s": 0.28, "min_clearance_used": 0.2, "multipoint_deficit": 0, "open_single": [], "pad_pairs_open": {"count": 0, "nets": []}, "regraded_nets": 3, "routed": 3, "scope": "merged", "terminal_restores_broken": [], "vias": 4}
+  DRC settings: wrote 1 value(s) to /tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb.kicad_pro to match the routed floors (close+reopen in KiCad if it is open). WRITES, not changes: a key the project never declared counts here, and one logical value is written once per net class:
+      rules.min_via_annular_width: 0.15 -> 0.1 mm
+PROJECT_WRITES_JSON: {"project": "/tmp/claude-0/-home-claude/f3643e50-cbcc-590e-9679-501fb746721d/scratchpad/run_m24/board.kicad_pcb.kicad_pro", "writes": ["rules.min_via_annular_width: 0.15 -> 0.1 mm"]}
+  Route-step trade recorded for the next step's gate: lost 0, gained 3 (accept)
+Wall time: 8.2s (whole run)
+EXIT=0
+  second opinion: 0 DRC items | nets only it calls unconnected: none (and ['V+', 'V-'], by its estimate of the pour only)
+[2d] tracks 326 vias 77 unconnected nets 27 unjustified 0 (+5 warnings) too long 0 (+0 warnings) | must-fix: none
+[2d] time 30 s: router 2 call(s) 16 s (path search 0.4 s) | other scripts 7 s | own work 0 s | checks 7 s | untimed 1 s
+[2d] counts: supply zones 3, router calls 2, nets given to the router 5, nets the router completed 5
