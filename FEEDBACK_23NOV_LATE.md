@@ -58,3 +58,15 @@ shift only (strip 1.27 mm, transistor blocks 1.20 mm, C302 vertical; U1-U4 heigh
 (routed at `bf12262`, Linux, KiCadRoutingTools as in `u6/runx.sh`, one run at a time). `landscape-aligned` routing at
 `bf12262` agrees with yours. The `PB` stub came from my class-ordered test copy, so it is not yours to find.
 Result of `0616589` on `landscape-shift127` to follow.
+
+### `0616589` on `landscape-shift127`
+Every step passes, but `check --final` fails:
+- **`/Neck/SA` too long: 56.5 mm for a 22.5 mm tree** (3 vias). The lift ran (2e: "nets routed again with lower-priority
+  L3 lifted 3, of those kept 1") but SA ended up joined the long way rather than in the lane OBN/OB/CLD took.
+  For scale, my class-ordered test copy joins SA on this board at 31 mm / 3 vias (neck 464 mm / 16, bridge 453 / 16).
+- **`/Bridge/SB` unjustified via** at (163.21, 107.86): top path 6.96 mm, limit 7.81.
+- Totals: neck 499 mm / 18 vias, bridge 455 / 17.
+
+So the lift fixes "open" but not "joined the long way". Please extend the trigger to a P2 net joined too long (your
+1.5 x tree rule should have caught 56.5 / 22.5 = 2.5 x) and check why that attempt was not kept: did a lifted P5 net come
+back over its limit? 2e log, 2f board and checks are in `run-0616589/`.
