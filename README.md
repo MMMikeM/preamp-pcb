@@ -40,7 +40,8 @@ failed stays in `work/<step>.kicad_pcb` to look at. A board with arc tracks is r
   placement can be judged on a whole board. Both remove the vias and tracks that end up joining nothing (a pad via whose L3
   join was made another way, a track stub with a free end); `2d` does the same for the battery and bias vias. A V+ or V-
   via its zone misses is left for `check --final` to report. A pair the via check flags is routed again on top, with only
-  the inner-layer track between the two pieces lifted. A net still open, or a front-end net joined off the top layer at
+  the inner-layer track between the two pieces lifted; kept if the new top link is within the pair's own limit and not squeezed
+  or beside high-impedance copper. A net still open, or a front-end net joined off the top layer at
   over 1.5 x its tree, with L3 track of a lower-priority signal or bias net in its way, is joined again with those tracks
   lifted and they are routed again round it: once lifting the bias alone, once every lower-priority net in the way. Of the
   results where it joins and nothing is left open, squeezed or cut, the one with the lowest routing score (`score.py`) is

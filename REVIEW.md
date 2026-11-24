@@ -11,8 +11,15 @@ net ends over its limit:
 | every lower net lifted (kept) | **24.7 mm**, 3 vias | **465 mm / 18 vias** | **2086** |
 
 The second was refused before because `/Neck/OA` came back 1.3 mm over its 24.6 mm limit. A net too long off the top layer
-is now a warning on P4/P5 (as an unjustified via is), must-fix elsewhere. Full run to 2f: every step passes; `check
---final` has one must-fix left, an unjustified via on `/Bridge/SB` (P2), which the run without the retry has too.
+is now a warning on P4/P5 (as an unjustified via is), must-fix elsewhere.
+
+That left one must-fix, an unjustified via on `/Bridge/SB` (U2.5's piece, joined through two vias though a 7.0 mm top path
+fits its 7.8 mm limit). The top retry found that path but judged it by the top-only limit for a whole net, and SB, already
+25 mm through its L3 link to RS201, fails that with any link. It now judges the new link: within the pair's own limit, not
+squeezed, not beside high-impedance copper. **shift127 to 2f: every step passes, `check --final` passes with no must-fix**
+(one P5 warning each for an unjustified via and a long net); neck 465 mm / 18 vias, bridge 456 / 15 (SB 31.5 mm / 2 vias,
+was 30.4 / 4). The other four boards come out identical. Judging that retry by the routing score as well was tried and
+dropped: mid-step, nets routed later are not there yet, and it refused a `/Bridge/DB` move the finished board was better for.
 
 7bccb83, 509fb5a and aligned come out identical. **83962f0 changes:** lifting the bias shortens `/Neck/SA` 9.6 mm but costs
 PB 6.3 mm and 2 vias; with SA (P2, not a drain) and PB (P6) both weighted 3 the score calls it even (3549 against 3548), so

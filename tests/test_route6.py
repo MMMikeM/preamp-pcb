@@ -458,7 +458,8 @@ def test_a_track_stub_is_removed_back_to_where_it_joins(bare, work):
     assert [s['net'] for s in checks.dangling_tracks(bare)] == [n]
     bare.save(stage_route.BOARD); stage_route.drop_dangling([n], 'test'); B = bd.Board(stage_route.BOARD)
     assert len(B.segs) == 1 and not checks.top_incomplete(B, n) and checks.dangling_tracks(B) == []
-def test_a_flagged_pair_on_a_shared_inner_track_moves_to_top_and_the_third_pad_stays_joined(bare, work, monkeypatch):
+@pytest.mark.parametrize('detour', [0, 25])                                         # 25: the net is long already through its other link, so the
+def test_a_flagged_pair_on_a_shared_inner_track_moves_to_top_and_the_third_pad_stays_joined(bare, work, monkeypatch, detour):   # top-only limit for whole nets would refuse any link
     monkeypatch.setenv('ROUTER_DIR', str(work)); P = drops.Placer(bare)
     def three(n):
         ps = [p for p in ends(bare, n) if drops.smd_top(p) and P.spot(p)]
@@ -466,7 +467,8 @@ def test_a_flagged_pair_on_a_shared_inner_track_moves_to_top_and_the_third_pad_s
             if math.dist((a['x'], a['y']), (b['x'], b['y'])) < 4 and min(math.dist((c['x'], c['y']), (q['x'], q['y'])) for q in (a, b)) > 9: return a, b, c
     n, (a, b, c) = next((n, t) for n in bare.nets if bd.is_signal(n) and len(ends(bare, n)) == 3 for t in [three(n)] if t)
     va, vb, vc = (P.spot(p)[:2] for p in (a, b, c)); bare.add([bare.via_text(*v, 0.5, 0.3, n) for v in (va, vb, vc)])
-    track(bare, n, [vc, va], layer='In2.Cu'); track(bare, n, [va, vb], layer='In2.Cu')                    # one inner track serving all three pads
+    ca = [vc, (vc[0], vc[1] + detour), (va[0], va[1] + detour), va] if detour else [vc, va]
+    track(bare, n, ca, layer='In2.Cu'); track(bare, n, [va, vb], layer='In2.Cu')                         # one inner track serving all three pads
     assert any({x['a'], x['b']} == {checks.label(a), checks.label(b)} for x in via_justify.check(bare, nets=[n]))
     bare.save(stage_route.BOARD)
     def run(cmd, cwd):
@@ -474,7 +476,7 @@ def test_a_flagged_pair_on_a_shared_inner_track_moves_to_top_and_the_third_pad_s
     monkeypatch.setattr(stage_route, 'run_router', run)
     stage_route.top_again([n], 'test'); B = bd.Board(stage_route.BOARD)
     inner = [s for s in B.segs if s['net'] == n and s['layer'] == 'In2.Cu']
-    assert not checks.top_incomplete(B, n) and len(inner) == 1 and len([v for v in B.vias if v['net'] == n]) == 2
+    assert not checks.top_incomplete(B, n) and len(inner) == len(ca) - 1 and len([v for v in B.vias if v['net'] == n]) == 2
 def test_a_net_shut_out_by_a_lower_priority_l3_track_is_joined_first_and_that_track_routed_again(bare, work, monkeypatch):
     monkeypatch.setenv('ROUTER_DIR', str(work)); n, m = close_pairs(bare)[:2]; a, b = ends(bare, n)
     (work / 'net_classes.json').write_text(json.dumps({'P2_FrontEnd': [n], 'P5_AudioOut': [m]}))

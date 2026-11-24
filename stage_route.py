@@ -322,14 +322,25 @@ def joined_off_top(B, net, ends_a, ends_b):
             if to not in done: heapq.heappush(heap, (d + step, next(k), to, way + [s]))
 def top_again(nets, step):
     """A pair the via check flags has a legal top path within its limit, yet is joined through vias: the router took another
-    way while other nets were in the way. Each such net is routed again on top alone and kept only if the whole net stays joined
-    and passes the pass-1 judging; otherwise the board goes back."""
+    way while other nets were in the way. The inner-layer track between the two pieces is lifted and the net routed again on top
+    alone. Kept only if the net joins and the new top track is within the pair's own limit and is not squeezed or beside
+    high-impedance copper; otherwise the board goes back. The new link is judged, not the whole net: a net that also runs on L3
+    may be long already, and the top-only limit for whole nets would refuse any link. Not judged by score.py: mid-step, the nets
+    routed later are not there yet, and on one board that refused a move the finished board was better for."""
     for x in via_justify.check(bd.Board(BOARD), nets=[n for n in nets if bd.is_signal(n)]):
         B = bd.Board(BOARD); n = x['net']; off = joined_off_top(B, n, x['vias_a'], x['vias_b'])
         if not off or any(o['locked'] for o in off): continue
         shutil.copy(BOARD, BOARD + '.via'); before = copper_ids(B)
         B.remove([o['uuid'] for o in off]); B.save(BOARD)
-        try: router([n], ['F.Cu'], TOP_ONLY, add_only=True); drop_dangling([n], step); why = refuse_top(bd.Board(BOARD), n, before)
+        try:
+            router([n], ['F.Cu'], TOP_ONLY, add_only=True); drop_dangling([n], step); B = bd.Board(BOARD)
+            link = sum(math.dist((s['x1'], s['y1']), (s['x2'], s['y2'])) for s in B.segs if s['net'] == n and s['uuid'] not in before and s['layer'] == 'F.Cu')
+            pinch = squeezed(B, n, before)
+            why = next((w for bad, w in (
+                (checks.top_incomplete(B, n), ('open', 'not joined on top')),
+                (link > x['limit'], ('too long', f"a {link:.1f} mm top link for a {x['limit']:.1f} mm limit")),
+                (len(pinch) >= 2, ('squeezed', f'squeezed on top, under {PINCH} mm from {pinch}')),
+                (hz_run(B, n, before) > HZ_RUN, ('beside high-impedance copper', 'runs beside high-impedance copper'))) if bad), None)
         except StepFailed as e: why = ('router', f'the retry failed ({e})')      # an optional clean-up must not cost the step what it already routed
         if why: shutil.copy(BOARD + '.via', BOARD)
         count(f'{step} flagged vias retried on top'); count(f'{step} flagged vias replaced on top', int(not why))
