@@ -36,14 +36,15 @@ failed stays in `work/<step>.kicad_pcb` to look at. A board with arc tracks is r
   copies those nets, skipping any whose copy would collide with copper that is staying, and `2i` routes whatever the copy
   did not cover. When no net has a twin (channels laid out by hand), `2h` copies nothing and passes.
 - `2e` and `2i` fail on a net left open. A net off the top layer longer than max(1.8 x its tree, tree + 12 mm) (P4 and P5
-  nets, being low-impedance, get 2.2 x) does not stop the run: `check --final` reports it, so the placement can be judged
-  on a whole board. Both remove the vias and tracks that end up joining nothing (a pad via whose L3
+  nets, being low-impedance, get 2.2 x) does not stop the run: `check --final` reports it (a warning on P4/P5), so the
+  placement can be judged on a whole board. Both remove the vias and tracks that end up joining nothing (a pad via whose L3
   join was made another way, a track stub with a free end); `2d` does the same for the battery and bias vias. A V+ or V-
   via its zone misses is left for `check --final` to report. A pair the via check flags is routed again on top, with only
   the inner-layer track between the two pieces lifted. A net still open, or a front-end net joined off the top layer at
   over 1.5 x its tree, with L3 track of a lower-priority signal or bias net in its way, is joined again with those tracks
-  lifted and they are routed again round it; kept only if it now joins (or, if long, the class-weighted total drops) and
-  nothing else gets worse.
+  lifted and they are routed again round it: once lifting the bias alone, once every lower-priority net in the way. Of the
+  results where it joins and nothing is left open, squeezed or cut, the one with the lowest routing score (`score.py`) is
+  kept, if the net was open or the score drops.
 - With the net classes from setup, an unjustified via is must-fix on P1-P3, a warning on P4-P6 and not reported on any
   other net (power, battery and ground are low-impedance, so a via costs nothing there).
 - `2f` puts a via in each loose test point where one fits and has the router reach the rest by a track, then clears

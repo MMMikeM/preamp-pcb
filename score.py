@@ -30,6 +30,7 @@ CONSTANTS = dict(WEIGHT=WEIGHT, NODE_WEIGHT=NODE_WEIGHT, UNCLASSED=UNCLASSED, VI
                  COUPLE_MM=COUPLE_MM, BANDS=BANDS, GATE_BANDS=GATE_BANDS, EXEMPT_R=EXEMPT_R, EXEMPT_C=EXEMPT_C)
 
 def classes_for(board, given=None):
+    if isinstance(given, dict): return given
     if given: return json.load(open(given))
     pro = os.path.splitext(board)[0] + '.kicad_pro'
     if not os.path.exists(pro): return {}
@@ -66,6 +67,10 @@ def exempt_pairs(B, rank):
                 for k, p2 in edges.get(m, ()):
                     if k != n: out[n].setdefault(k, f'{p1}, {m}, {p2}')
     return out
+
+def routing_total(path, classes=None):
+    """The whole board's routing score: what a retry compares"""
+    return round(sum(r['p_routing'] for r in score(path, classes)['rows'].values()), 1)
 
 def score(path, classes=None):
     B = bd.Board(path); cl = classes_for(path, classes)

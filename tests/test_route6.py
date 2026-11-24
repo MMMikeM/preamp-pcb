@@ -494,6 +494,8 @@ def test_a_net_too_long_off_the_top_layer_fails_only_the_final_check(bare, work,
     bare.save(stage_route.BOARD); stage_route.finish('check', False, final=False)
     R = json.load(open(work / 'check_checks.json')); assert [x['net'] for x in R['too_long']] == [n]
     assert 'too_long' in checks.must_fix(R, final=True) and 'too_long' not in checks.must_fix(R)
+    (work / 'net_classes.json').write_text(json.dumps({'P5_AudioOut': [n]})); stage_route.finish('check', False, final=False)
+    R = json.load(open(work / 'check_checks.json')); assert R['too_long'] == [] and [x['net'] for x in R['too_long_warnings']] == [n]   # low-impedance: a warning
 def test_a_router_killed_from_outside_is_not_reported_as_a_routing_result():
     assert 'probably out of memory' in stage_route.how_it_ended('route.py', -9) and 'out of memory' in stage_route.how_it_ended('route.py', 0xC0000017)
     assert stage_route.how_it_ended('route.py', 1) == 'route.py exited 1'

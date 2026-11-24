@@ -1,3 +1,26 @@
+# route6: reviewer feedback (24 Nov 2026, second)
+
+## `landscape-shift127`: `/Neck/SA` now joins
+Reproduced your failure at `bf12262` (2e leaves SA open). The retry that lifts lower-priority L3 now tries both lifts from
+the same board and keeps the one with the lower routing score (`score.py`), instead of refusing any result where a lifted
+net ends over its limit:
+
+| shift127, SA | SA | Neck | Routing score |
+|---|---|---|---|
+| bias lifted alone | 57 mm, 3 vias, 18 mm beside OBN | 499 mm / 18 vias | 2297 |
+| every lower net lifted (kept) | **24.7 mm**, 3 vias | **465 mm / 18 vias** | **2086** |
+
+The second was refused before because `/Neck/OA` came back 1.3 mm over its 24.6 mm limit. A net too long off the top layer
+is now a warning on P4/P5 (as an unjustified via is), must-fix elsewhere. Full run to 2f: every step passes; `check
+--final` has one must-fix left, an unjustified via on `/Bridge/SB` (P2), which the run without the retry has too.
+
+7bccb83, 509fb5a and aligned come out identical. **83962f0 changes:** lifting the bias shortens `/Neck/SA` 9.6 mm but costs
+PB 6.3 mm and 2 vias; with SA (P2, not a drain) and PB (P6) both weighted 3 the score calls it even (3549 against 3548), so
+SA stays at 34.3 mm, where the old rule (a P2 mm worth 3 of any other) took it. Your 22 Nov answer said a P2 millimetre is
+worth more than a P6 one; with your weight answers in, please say whether the sources (SA, SB) should weigh more than bias.
+
+---
+
 # route6: proposal, 24 Nov 2026: a score weighted by node
 
 Total millimetres and vias treat 20 mm of V+ like 20 mm of GA. `score.py` (read-only, not wired into any step) weighs each net
