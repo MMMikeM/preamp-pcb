@@ -1,10 +1,12 @@
 """A routed board's score, weighted by how much each net cares: a millimetre on a gate is not a millimetre on V+.
-Read-only; prototype. Every net gets a weight (WEIGHT by class, NODE_WEIGHT by node; the numbers are placeholders standing for
-the node's impedance, for the author to set) and is scored in two parts:
+Read-only. Every net gets a weight (WEIGHT by class, NODE_WEIGHT by node, standing for the node's impedance; the author's
+numbers of 24 Nov) and is scored in two parts:
   placement  weight x its shortest pad-to-pad tree: what the parts' positions force; only moving parts changes it
   routing    weight x (length - tree), + weight x VIA_MM per via, + weight x COUPLE_MM x its coupled length
-Coupled length: a victim net's copper (P1-P3) beside an aggressor's (P5, the outputs) on the same layer, counted in bands by
-edge-to-edge gap (BANDS, wider round the gates: GATE_BANDS). L2 and L4 are ground, so the top layer and L3 do not see each other.
+Coupled length: a victim net's copper (the gates and P1, the drains, the servo inputs: VICTIM_NODES) beside an aggressor's (P5,
+the outputs and jacks) on the same layer, weighted by edge-to-edge gap s: in full within 2h, then 5/(1+(s/h)^2), h being the
+layer's dielectric to its nearest ground plane (DIELECTRIC, from setup6's stackup). A kilohm node is not a victim: a fraction
+of a picofarad puts its corner in the gigahertz. L2 and L4 are ground, so the top layer and L3 do not see each other.
 Two nets the circuit joins through a small impedance (one or two 2-pad parts, R <= EXEMPT_R or C >= EXEMPT_C, not by way of
 ground, a rail or a bias net) are not charged: stray capacitance there sits beside a far lower path.
 Pass/fail rules (gates top-only, nothing open, DRC) stay in checks.py, not here.
@@ -15,19 +17,22 @@ from shapely.ops import unary_union
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import board as bd, checks, compare_channels as cc
 
-WEIGHT = {1: 100.0, 2: 3.0, 3: 30.0, 4: 3.0, 5: 1.0, 6: 3.0, 7: 0.3, 8: 0.0}      # by class number (P1_Gate -> 1)
+WEIGHT = {1: 100.0, 2: 3.0, 3: 10.0, 4: 3.0, 5: 1.0, 6: 3.0, 7: 0.3, 8: 0.0}      # by class number (P1_Gate -> 1)
 NODE_WEIGHT = [('*/GA', 100.0), ('*/GB', 100.0), ('*/LINK', 100.0),               # the pickup node: only 47M and 220p on it
-               ('*/SV*', 30.0),                                                    # servo inputs, 10M and 47M
+               ('*/SV*', 10.0),                                                    # servo inputs: what lands there passes the integrator, cut ~40 dB
                ('*/DA', 10.0), ('*/DB', 10.0),                                     # op-amp inputs: stray capacitance there touches loop stability
-               ('*/VB', 10.0)]                                                     # gate bias, decoupled by 100n
+               ('*/VB', 3.0)]                                                      # gate bias: shunted by C103, then 47M into the gate
 UNCLASSED = 3.0                                                                    # a signal net no class names
-VICTIMS = (1, 2, 3); AGGRESSORS = (5,)
+VICTIM_NODES = ('*/DA', '*/DB', '*/SV*')                                           # and every P1 net
+AGGRESSORS = {5: 1.0}                                                              # class -> strength; no P4 net is driven by an op-amp output
 VIA_MM = 2.0; COUPLE_MM = 5.0
-BANDS = ((0.3, 1.0), (0.6, 0.5), (1.0, 0.25))                                      # (gap in mm edge to edge, share of COUPLE_MM)
-GATE_BANDS = ((1.0, 1.0), (2.0, 0.5), (3.0, 0.25))                                 # the pipeline keeps outputs 1 mm off the gates already
+DIELECTRIC = {'F.Cu': 0.0994, 'B.Cu': 0.0994, 'In2.Cu': 0.1164}                    # mm to the nearest ground plane; L3 has 0.55 mm to L2 above
+EDGES = (2, 3, 4, 6, 8, 12, 16)                                                    # band edges in units of h; beyond 16h the share is under 2 %
+def share(x): return 1.0 if x <= 2 else 5.0 / (1 + x * x)                          # x = gap / h; equal to 1 at x = 2
+SHARES = (1.0,) + tuple(share((a + b) / 2) for a, b in zip(EDGES, EDGES[1:]))      # each band at its middle
 EXEMPT_R = 10e3; EXEMPT_C = 100e-12
-CONSTANTS = dict(WEIGHT=WEIGHT, NODE_WEIGHT=NODE_WEIGHT, UNCLASSED=UNCLASSED, VICTIMS=VICTIMS, AGGRESSORS=AGGRESSORS, VIA_MM=VIA_MM,
-                 COUPLE_MM=COUPLE_MM, BANDS=BANDS, GATE_BANDS=GATE_BANDS, EXEMPT_R=EXEMPT_R, EXEMPT_C=EXEMPT_C)
+CONSTANTS = dict(WEIGHT=WEIGHT, NODE_WEIGHT=NODE_WEIGHT, UNCLASSED=UNCLASSED, VICTIM_NODES=VICTIM_NODES, AGGRESSORS=AGGRESSORS, VIA_MM=VIA_MM,
+                 COUPLE_MM=COUPLE_MM, DIELECTRIC=DIELECTRIC, EDGES=EDGES, SHARES=SHARES, EXEMPT_R=EXEMPT_R, EXEMPT_C=EXEMPT_C)
 
 def classes_for(board, given=None):
     if isinstance(given, dict): return given
@@ -86,39 +91,42 @@ def score(path, classes=None):
     line = lambda s: (LineString([(s['x1'], s['y1']), (s['x2'], s['y2'])]), s['w'] / 2)
     agg_cu = {(l, a): unary_union([g for n, g, k, o in B.copper(l) if n == a]) for l in B.copper_layers for a in aggressors if any(n == a for n, *_ in B.copper(l))}
     agg_tracks = {(l, a): [line(s) for s in B.segs if s['net'] == a and s['layer'] == l] for l in B.copper_layers for a in aggressors}
+    victim = lambda n: rank(n) == 1 or any(fnmatch.fnmatchcase(n, p) for p in VICTIM_NODES)
     rows = {}
     for n in B.nets:
         r = rank(n); w = weight(n)
         segs = [s for s in B.segs if s['net'] == n]; L = sum(math.dist((s['x1'], s['y1']), (s['x2'], s['y2'])) for s in segs)
         t = tree_len([(p['x'], p['y']) for p in B.pads if p['net'] == n and not checks.is_tp(p)]); V = sum(v['net'] == n for v in B.vias)
         by_aggr = {}
-        if r in VICTIMS:
-            bands = GATE_BANDS if r == 1 else BANDS
+        if victim(n):
             for l in B.copper_layers:
                 mine = [line(s) for s in segs if s['layer'] == l]
                 pads = [g for m, g, k, o in B.copper(l) if m == n and k in ('pad', 'via')]
+                gaps = [e * DIELECTRIC.get(l, max(DIELECTRIC.values())) for e in EDGES]
                 for a in aggressors:
                     if a in exempt.get(n, {}): continue
-                    per = [0.0] * len(bands)
+                    per = [0.0] * len(gaps)
                     if mine and (l, a) in agg_cu:                                    # the victim's tracks beside the aggressor's copper
-                        per = [x + y for x, y in zip(per, banded(mine, agg_cu[(l, a)], bands))]
+                        per = [x + y for x, y in zip(per, banded(mine, agg_cu[(l, a)], gaps))]
                     if pads and agg_tracks[(l, a)]:                                  # the aggressor's tracks beside the victim's pads and vias
-                        per = [x + y for x, y in zip(per, banded(agg_tracks[(l, a)], unary_union(pads), bands))]
-                    if any(per): by_aggr[a] = [round(x + y, 2) for x, y in zip(by_aggr.get(a, [0.0] * len(bands)), per)]
-            c = sum(share * mm for per in by_aggr.values() for (_, share), mm in zip(bands, per))
-        else: c = 0.0
+                        per = [x + y for x, y in zip(per, banded(agg_tracks[(l, a)], unary_union(pads), gaps))]
+                    if any(x > 1e-6 for x in per):
+                        was = by_aggr.get(a, dict(close=0.0, near=0.0, effective=0.0)); k = AGGRESSORS[rank(a)]
+                        by_aggr[a] = dict(close=round(was['close'] + per[0], 2), near=round(was['near'] + sum(per), 2),
+                                          effective=round(was['effective'] + k * sum(f * mm for f, mm in zip(SHARES, per)), 2))
+        c = sum(v['effective'] for v in by_aggr.values())
         ex = max(0.0, L - t) if segs or V else 0.0
         rows[n] = dict(channel=cc.net_channel(n, refs.get(n, ())), cls=r, weight=w, length=round(L, 2), tree=round(t, 2), excess=round(ex, 2), vias=V,
                        coupled_by_aggressor=by_aggr, coupled=round(c, 2),
                        p_placement=round(w * t, 1), p_excess=round(w * ex, 1), p_vias=round(w * VIA_MM * V, 1), p_coupling=round(w * COUPLE_MM * c, 1))
         rows[n]['p_routing'] = round(rows[n]['p_excess'] + rows[n]['p_vias'] + rows[n]['p_coupling'], 1)
     unclassed = sorted(n for n in B.nets if rank(n) is None)
-    shown = sorted((n, m, why) for n in B.nets if rank(n) in VICTIMS for m, why in exempt.get(n, {}).items() if rank(m) in AGGRESSORS)
+    shown = sorted((n, m, why) for n in B.nets if victim(n) for m, why in exempt.get(n, {}).items() if rank(m) in AGGRESSORS)
     return dict(board=path, rows=rows, unclassed=unclassed, exempt=shown)
 
-def banded(lines, near, bands):
-    """mm of the centre lines [(LineString, half width)] within each band's gap of the copper `near`, band by band"""
-    inside = [sum(g.intersection(near.buffer(gap + hw, 8)).length for g, hw in lines) for gap, _ in bands]
+def banded(lines, near, gaps):
+    """mm of the centre lines [(LineString, half width)] within each of the edge-to-edge `gaps` of the copper `near`, band by band"""
+    inside = [sum(g.intersection(near.buffer(gap + hw, 8)).length for g, hw in lines) for gap in gaps]
     return [inside[0]] + [inside[k] - inside[k - 1] for k in range(1, len(inside))]
 
 TERMS = ('p_routing', 'p_excess', 'p_vias', 'p_coupling', 'p_placement')
@@ -140,7 +148,7 @@ def show_one(S):
         for n, r in sorted(((n, r) for n, r in S['rows'].items() if r['channel'] == ch), key=lambda x: -x[1]['p_routing'])[:6]:
             if r['p_routing'] < 1: break
             print(f"    {n:<22} P{r['cls'] or '?'} w{r['weight']:<5g} routing {r['p_routing']:6.0f}: {r['excess']:.1f} mm over its {r['tree']:.1f} mm tree, {r['vias']} vias, "
-                  f"{r['coupled']:.1f} mm coupled" + (f" {r['coupled_by_aggressor']}" if r['coupled_by_aggressor'] else ''))
+                  f"{r['coupled']:.1f} mm coupled" + (' (' + ', '.join(f"{g}: {v['close']:.1f} mm within 2h, {v['near']:.1f} within 16h" for g, v in r['coupled_by_aggressor'].items()) + ')' if r['coupled_by_aggressor'] else ''))
 
 def show_diff(A, Bs):
     out = {}
@@ -153,16 +161,16 @@ def show_diff(A, Bs):
         for n, dn in [x for x in rows if abs(x[1]) >= 1][:8]:
             a, b = A['rows'][n], Bs['rows'][n]
             ag = sorted(set(a['coupled_by_aggressor']) | set(b['coupled_by_aggressor']))
-            cpl = ', '.join(f"{g} {sum(a['coupled_by_aggressor'].get(g, [0])):.1f}->{sum(b['coupled_by_aggressor'].get(g, [0])):.1f}" for g in ag)
+            cpl = ', '.join(f"{g} {a['coupled_by_aggressor'].get(g, {}).get('effective', 0):.1f}->{b['coupled_by_aggressor'].get(g, {}).get('effective', 0):.1f}" for g in ag)
             print(f"    {n:<22} P{a['cls'] or '?'} w{a['weight']:<5g} {dn:+6.0f}: excess {a['excess']:.1f}->{b['excess']:.1f} mm, vias {a['vias']}->{b['vias']}"
-                  + (f", beside {cpl} mm" if cpl else ''))
+                  + (f", coupled to {cpl} effective mm" if cpl else ''))
     return out
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(); ap.add_argument('board'); ap.add_argument('other', nargs='?'); ap.add_argument('--classes'); ap.add_argument('--json')
     a = ap.parse_args(); A = score(a.board, a.classes)
     print('weights by class:', ', '.join(f'P{k} {v:g}' for k, v in WEIGHT.items()), '| by node:', ', '.join(f'{p} {w:g}' for p, w in NODE_WEIGHT),
-          f'| via = {VIA_MM:g} mm, coupled mm x {COUPLE_MM:g}, bands {BANDS}, round gates {GATE_BANDS}')
+          f'| via = {VIA_MM:g} mm, coupled mm x {COUPLE_MM:g}, full within 2h then 5/(1+(s/h)^2), h {DIELECTRIC}')
     if A['unclassed']: print('no class (weighted', UNCLASSED, 'if a signal):', ', '.join(A['unclassed']))
     print('not charged, joined on purpose:', '; '.join(f'{n}-{m} ({why})' for n, m, why in A['exempt']))
     if a.other: Bs = score(a.other, a.classes); out = dict(constants=CONSTANTS, before=A, after=Bs, channels=show_diff(A, Bs))

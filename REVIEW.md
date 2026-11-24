@@ -1,3 +1,24 @@
+# route6: reviewer feedback (24 Nov 2026, third): your score answers, applied
+
+`score.py` now uses your answers; the proposal section further down describes the earlier placeholders.
+- **Weights:** gates and LINK 100; servo inputs 10; DA/DB 10; VB 3; other P2, P4, P6 3; P5 1; power 0.3; GND 0. Vias 2 mm.
+- **Victims:** P1, DA/DB and the servo nodes only; a kilohm node is no longer charged for coupling.
+- **Coupling curve:** in full within 2h, then 5/(1+(s/h)^2), so it is continuous at 2h (1/(1+(s/h)^2) alone drops from 1 to
+  0.2 there). h from setup6's stackup: 0.0994 mm for the top layer (to L2). L3 is 0.1164 mm above L4 but 0.55 mm below L2, so
+  its field is looser than the top's; it uses 0.1164, the nearer plane. Counted out to 16h, beyond which the share is under
+  2 %. On the top layer that is 0.29 at 0.4 mm, 0.14 at 0.6 mm and 0.05 at 1 mm. Please confirm your order uses this stackup.
+- **Aggressors:** P5 only. No P4 net is driven by an op-amp output: every output pin of U3/U4 is on a P5 net, and U6's are
+  servo and bias nets. If you meant the second stage's swinging nodes (`Net-(Q103-C)`, the collector to U3.6), name them and
+  they go in at half strength. `/TIP`, `/OUT_NK`, `/OUT_BR` and `Net-(J2-Pin_2)` are P5 already.
+- `Net-(U3C--)` still has no class here; it waits for your `.kicad_pro`.
+
+Re-run of the five boards: every result is identical to the one before, and each passes `check --final`. The verdicts of
+the six comparisons in these replies hold with any one weight or constant multiplied or divided by 3, except that mirrorB's
+"OB moved on top" now scores slightly worse (+21; its gain was on P2 source nodes, no longer victims). On 83962f0 the score
+still calls lifting the bias for `/Neck/SA` even (1058 against 1056), as your weights for SA and PB (3 each) imply.
+
+---
+
 # route6: reviewer feedback (24 Nov 2026, second)
 
 ## `landscape-shift127`: `/Neck/SA` now joins

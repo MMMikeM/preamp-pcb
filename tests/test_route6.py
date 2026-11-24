@@ -511,16 +511,17 @@ def test_check_takes_a_board_by_path_and_leaves_it_alone(bare, tmp_path):
     r = subprocess.run([sys.executable, os.path.join(os.path.dirname(HERE), 'stage_route.py'), 'check', '--board', str(src)], env=env, capture_output=True, text=True)
     assert r.returncode == 0 and '[check] tracks 0' in r.stdout and src.read_text() == was and sorted(os.listdir(tmp_path)) == ['mine.kicad_pcb', 'w']
 SEVEN = os.path.join(os.path.dirname(HERE), 'fixtures', 'landscape-7bccb83', 'humbucker-preamp.kicad_pcb')
-def test_the_score_charges_a_front_end_track_beside_an_output_by_the_gap(bare, tmp_path):
+def test_the_score_charges_a_sensitive_track_beside_an_output_and_not_a_kilohm_one(bare, tmp_path):
     import score
     n, m = close_pairs(bare)[:2]; a, b = ends(bare, n); straight(bare, n); d = math.dist((a['x'], a['y']), (b['x'], b['y']))
     nx, ny = -(b['y'] - a['y']) / d, (b['x'] - a['x']) / d; off = 0.2 + 0.2                       # 0.2 mm edge to edge for two 0.2 mm tracks
     track(bare, m, [(a['x'] + off * nx, a['y'] + off * ny), (b['x'] + off * nx, b['y'] + off * ny)])
-    f = tmp_path / 'b.kicad_pcb'; bare.save(str(f)); cl = tmp_path / 'cl.json'; cl.write_text(json.dumps({'P2_FrontEnd': [n], 'P5_AudioOut': [m]}))
+    f = tmp_path / 'b.kicad_pcb'; bare.save(str(f)); cl = tmp_path / 'cl.json'; cl.write_text(json.dumps({'P1_Gate': [n], 'P5_AudioOut': [m]}))
     r = score.score(str(f), str(cl))['rows'][n]
-    assert r['coupled_by_aggressor'][m][0] >= d - 0.5 and r['p_coupling'] == pytest.approx(r['weight'] * score.COUPLE_MM * r['coupled'], abs=0.2)
+    cl.write_text(json.dumps({'P2_FrontEnd': [n], 'P5_AudioOut': [m]})); assert score.score(str(f), str(cl))['rows'][n]['coupled'] == 0   # a kilohm node shrugs it off
+    assert r['coupled_by_aggressor'][m]['close'] >= d - 0.5 and r['p_coupling'] == pytest.approx(r['weight'] * score.COUPLE_MM * r['coupled'], abs=0.2)
 def test_the_score_does_not_charge_nets_the_circuit_joins_through_a_small_impedance():
     import score
     S = score.score(SEVEN); pairs = {(n, m) for n, m, _ in S['exempt']}
-    assert ('/Neck/DB', '/Neck/OB') in pairs and ('/Neck/SA', '/Neck/OA') in pairs                 # 1k and 270p; 2k
+    assert ('/Neck/DB', '/Neck/OB') in pairs and ('/Neck/DA', '/Neck/OA') in pairs                 # through 1k and 270p each
     assert not any(n == '/Neck/GA' for n, _ in pairs)                                               # the gate reaches the cold-load drive only through 330k
