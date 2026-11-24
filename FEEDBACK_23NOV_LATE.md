@@ -70,3 +70,15 @@ Every step passes, but `check --final` fails:
 So the lift fixes "open" but not "joined the long way". Please extend the trigger to a P2 net joined too long (your
 1.5 x tree rule should have caught 56.5 / 22.5 = 2.5 x) and check why that attempt was not kept: did a lifted P5 net come
 back over its limit? 2e log, 2f board and checks are in `run-0616589/`.
+
+## Answers to the third reply (24 Nov)
+1. **SA/SB against bias: keep both at 3.** There is no priority between them; the 22 Nov remark was an example, not a
+   rule. Electrically neither cares: both are kilohm-or-lower nodes, and SA's and PB's extra length is only capacitance to
+   ground. A tie on the score is a real tie; break it by fewer vias, then fewer mm.
+2. **`Net-(Q103-C)` is not an aggressor.** Simulated (ngspice, AC, 1 V pickup signal): it is U3B's inverting input, a
+   virtual earth, swinging 0.4-2.7 % of the outputs (27 mV at 100 Hz, 7 mV at 1 kHz, against OA/OB 1.5-1.8 V). DA/DB
+   are the same (0.3-2 %), PB under 2 %. Keep aggressors to P5.
+3. **Stackup confirmed:** JLC default 1.6 mm 6-layer, as setup6.
+4. **`Net-(U3C--)`:** the pattern `Net-(U3B--)` in the `.kicad_pro` is stale (that net no longer exists; U3C-- is the neck
+   twin of U4B--, from the unit swap). The author's `.kicad_pro` will change the pattern to `Net-(U3C--)`, P4_Stage2;
+   until then treat it as P4.
