@@ -34,3 +34,12 @@ copied and which fell back to routing.
 
 ## Not proposed: `--ordering original` and `--quick 1`
 Not now.
+
+## Answers to REVIEW.md (25 Nov, split rails / check_weird / corridors)
+1. **22.6 mm V- hop on L3:** keep it as the fallback that makes a split board pass, but report it as a warning naming the
+   placement: the author would rather fix the placement than spend that much L3 on a rail. It only arose on e68324c; the
+   newest placement (jumpers across the top corners, fixture to follow) does not split.
+2. **R110.1 V+ via (centre 0.025 mm outside the outline, ring in the fill):** confirmed joined. KiCad DRC on that placement
+   (`run-2cc1234/2f`) reported only the V- break, nothing on R110 or V+.
+3. **Corridor retry:** keep it. It only keeps a result that wins on score, so it cannot make a board worse; 15 s per long net
+   is fine.
