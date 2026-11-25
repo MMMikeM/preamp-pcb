@@ -43,3 +43,8 @@ Not now.
    (`run-2cc1234/2f`) reported only the V- break, nothing on R110 or V+.
 3. **Corridor retry:** keep it. It only keeps a result that wins on score, so it cannot make a board worse; 15 s per long net
    is fine.
+
+## New fixture: `fixtures/landscape-topjumpers`
+The newest placement: JP101/JP102 (and twins) horizontal across the top corners, CLD on the outside; R122/R222 vertical beside
+C112/C212. At `01cfce3` from setup: `check --final` passes (must-fix none, no warnings), identical to our v0.24.2 run:
+neck 459 mm / 14 vias, bridge 452 / 15, shared 325 / 77; score 1149 (best so far).
