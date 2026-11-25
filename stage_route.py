@@ -169,6 +169,7 @@ def finish(step, commit, final=False, failed=None):
     per = {}
     cl = checks.classes_beside(BOARD) or (json.load(open(os.path.join(WORK, 'net_classes.json'))) if os.path.exists(os.path.join(WORK, 'net_classes.json')) else None)
     with timed('own checks', kind='check') as rec: R = checks.report(B, justify=final or step not in ('setup', '2a'), timing=per, classes=cl); rec['per_check_s'] = per
+    for h in R.get('rail_hops', []): print(f"  warning: {h['net']} needs {h['length']} mm of L3 hop to join {h['pads']}: the split plane leaves them apart on this placement")
     # a joined net over its off-top limit is reported, not a stop: the run goes on, so the placement can be judged on a whole board
     # on P4 and P5, low-impedance, it is a warning, as an unjustified via is there
     long = [dict(net=n, length=round(L, 1), tree=round(t, 1)) for n in B.nets if bd.is_signal(n) and leaves_top(B, n) and not checks.top_incomplete(B, n)

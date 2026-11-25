@@ -219,6 +219,17 @@ def supply_split(B):
     zoned = sorted({z['net'] for z in B.zones if z['net'] and z['net'] not in bd.GROUND and len(z['pts']) > 2})
     return unconnected(B, zoned) if zoned else []
 
+def rail_hops(B):
+    """Rail track on L3: 2d's hop, laid only where the split plane leaves part of a rail apart. Reported as a warning naming the pads it
+    joins: the author would rather move parts than spend that much L3 on a rail."""
+    out = []
+    for net in sorted(bd.RAILS):
+        hop = [s for s in B.segs if s['net'] == net and s['layer'] == 'In2.Cu']
+        if not hop: continue
+        apart = sorted(pad_groups(B, net, {s['uuid'] for s in hop}), key=len)[:-1]
+        out.append(dict(net=net, length=round(sum(math.dist((s['x1'], s['y1']), (s['x2'], s['y2'])) for s in hop), 1), pads=[[label(p) for p in g] for g in apart]))
+    return out
+
 def symmetry(B, cx=None, shift=None, tol=0.02):
     """every X1nn part must have its X2nn twin either mirrored about the board centre or shifted by `shift` mm"""
     shift = shift if shift is not None else bd.channel_shift(B)
@@ -241,7 +252,7 @@ def report(B, justify=True, timing=None, classes=None):
     def run(key, fn):
         t0 = time.perf_counter(); R[key] = fn()
         if timing is not None: timing[key] = round(time.perf_counter() - t0, 3)
-    for key, fn in (('unconnected', unconnected), ('clearance', clearances), ('holes', holes), ('edge', edge), ('hz', hz_rule), ('no_via_pads', no_via_pads), ('zone_integrity', zone_integrity), ('supply_split', supply_split), ('symmetry', symmetry)):
+    for key, fn in (('unconnected', unconnected), ('clearance', clearances), ('holes', holes), ('edge', edge), ('hz', hz_rule), ('no_via_pads', no_via_pads), ('zone_integrity', zone_integrity), ('supply_split', supply_split), ('rail_hops', rail_hops), ('symmetry', symmetry)):
         run(key, lambda fn=fn: fn(B))
     run('dangling_vias', lambda: [dict(net=v['net'], at=[round(v['x'], 2), round(v['y'], 2)]) for v in dangling_vias(B)])
     run('dangling_tracks', lambda: [dict(net=s['net'], layer=s['layer'], at=[round(s['x1'], 2), round(s['y1'], 2), round(s['x2'], 2), round(s['y2'], 2)]) for s in dangling_tracks(B)])

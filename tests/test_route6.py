@@ -215,6 +215,7 @@ def test_a_rail_drawn_as_two_zones_is_whole_only_where_copper_joins_them(bare):
     joined = lambda: any({checks.label(a), checks.label(c)} <= {checks.label(p) for p in g} for g in checks.pad_groups(bare, 'V+'))
     assert not joined() and checks.supply_split(bare)                                   # e68324c: V- in two zones, every check passed
     track(bare, 'V+', [(a['x'], a['y']), (c['x'], c['y'])], w=0.4, layer='In2.Cu'); assert joined()
+    hop = checks.rail_hops(bare); assert [h['net'] for h in hop] == ['V+'] and any(checks.label(c) in g for g in hop[0]['pads'])
 def test_zone_check_lets_a_via_sit_inside_a_finger(bare):
     _supply_zone(bare); bare.add([bare.via_text(106.5, 110, 0.6, 0.3, '/Neck/DA')]); assert checks.zone_integrity(bare) == []
 def test_via_check_ignores_pieces_that_never_leave_the_top_layer(bare):
