@@ -36,7 +36,10 @@ CONSTANTS = dict(WEIGHT=WEIGHT, NODE_WEIGHT=NODE_WEIGHT, UNCLASSED=UNCLASSED, VI
 
 def classes_for(board, given=None):
     if isinstance(given, dict): return given
-    if given: return json.load(open(given))
+    if given:
+        cl = json.load(open(given))
+        if not all(isinstance(v, list) for v in cl.values()): raise SystemExit(f'{given}: not {{class: [net patterns]}}; pass the run\'s net_classes.json, not a .kicad_pro')
+        return cl
     return checks.classes_beside(board) or {}
 
 def value(s):
@@ -160,7 +163,7 @@ def show_diff(A, Bs):
     return out
 
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser(); ap.add_argument('board'); ap.add_argument('other', nargs='?'); ap.add_argument('--classes'); ap.add_argument('--json')
+    ap = argparse.ArgumentParser(); ap.add_argument('board'); ap.add_argument('other', nargs='?'); ap.add_argument('--classes', help="the run's net classes as setup saves them (work/net_classes.json); by default the .kicad_pro beside the board"); ap.add_argument('--json')
     a = ap.parse_args(); A = score(a.board, a.classes)
     print('weights by class:', ', '.join(f'P{k} {v:g}' for k, v in WEIGHT.items()), '| by node:', ', '.join(f'{p} {w:g}' for p, w in NODE_WEIGHT),
           f'| via = {VIA_MM:g} mm, coupled mm x {COUPLE_MM:g}, full within 2h then 5/(1+(s/h)^2), h {DIELECTRIC}')

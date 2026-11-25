@@ -209,6 +209,12 @@ def test_zone_check_passes_a_whole_finger_and_flags_a_cut_one(bare):
     _supply_zone(bare); assert checks.zone_integrity(bare) == []
     track(bare, '/BAT+', [(104, 110), (109, 110)], w=0.5, layer='In4.Cu')                 # a foreign track straight across the finger
     bad = checks.zone_integrity(bare); assert len(bad) == 1 and bad[0]['net'] == 'V+' and bad[0]['pieces'] == 2 and len(bad[0]['cut_off']) == 1
+def test_a_rail_drawn_as_two_zones_is_whole_only_where_copper_joins_them(bare):
+    rail = sorted((p for p in bare.pads if p['net'] == 'V+'), key=lambda p: p['x']); a, c = rail[0], rail[-1]
+    for p in (a, c): bare.add([zone_text('V+', box(p['x'] - 1, p['y'] - 1, p['x'] + 1, p['y'] + 1)), bare.via_text(p['x'], p['y'], 0.6, 0.3, 'V+')])
+    joined = lambda: any({checks.label(a), checks.label(c)} <= {checks.label(p) for p in g} for g in checks.pad_groups(bare, 'V+'))
+    assert not joined() and checks.supply_split(bare)                                   # e68324c: V- in two zones, every check passed
+    track(bare, 'V+', [(a['x'], a['y']), (c['x'], c['y'])], w=0.4, layer='In2.Cu'); assert joined()
 def test_zone_check_lets_a_via_sit_inside_a_finger(bare):
     _supply_zone(bare); bare.add([bare.via_text(106.5, 110, 0.6, 0.3, '/Neck/DA')]); assert checks.zone_integrity(bare) == []
 def test_via_check_ignores_pieces_that_never_leave_the_top_layer(bare):

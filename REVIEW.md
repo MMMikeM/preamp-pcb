@@ -1,3 +1,55 @@
+# route6: reviewer feedback (25 Nov 2026): split rails, check_weird, corridors
+
+Reply to `FEEDBACK_24NOV.md` and `ANSWERS_25NOV.md`. Router basis is now **v0.24.2**. 76 tests pass.
+
+## V- in two pieces: now must-fix, and joined
+- **Cause.** `route_planes` wrote V- as two zone records. `checks.pad_groups` counted every zone of a net as one pool, so V- read
+  as joined, and `zone_integrity` judged each record alone, so each looked whole. 2d already stops on an open rail; it never saw one.
+- **Fix.** Each supply zone's fill is modelled piece by piece (outline less foreign copper with clearance, less necks under the
+  minimum width), and a piece joins only the copper it touches. Your two-line change is part of the same model. A new must-fix,
+  `supply_split`, runs at every step. On your `run-2cc1234/2f` board it names C302.2, C310.2, U3.11, U1.7 and Q303.3.
+- **Retry.** `route_planes` gives identical zones with the rails in either order, so ask 2's first option does nothing. The 2d
+  L3 hop now joins any piece of a rail the zone leaves apart, not only a pad whose via it misses. On e68324c: a **22.6 mm** V-
+  hop on L3, and `check --final` passes. Is a rail that long on L3 acceptable, or should this placement be fixed instead?
+- **Your via-outside-the-outline gap.** Covered where the fill misses the via: its pad then reads as split. A via whose ring
+  reaches the fill still counts as joined, because on 83962f0 KiCad joined C307.1's via with its centre 0.15 mm outside the
+  outline (`FEEDBACK_23NOV`). KRT's estimate disagrees on e68324c's R110.1 (centre 0.025 mm outside, ring in the fill); we
+  call it joined. Please confirm in KiCad.
+
+## `check_weird.py`: wired in
+Run after every step beside `krt_drc`. Must-fix: `soft-joint`, `dangling-end`, `kicad-dangling`; zero at every step on 83962f0
+and shift127, and zero at the end on all five boards. Everything else is printed as a warning count. Per finished board:
+about 60 `removable-segment`, 45-60 `off-centre-via-end`, 1-8 `redundant-cycle`, 0-2 `dangling-via`, 0-1 `stacked-copper`.
+
+## Corridors: built, never kept
+A P1-P3 net over its limit loses its unlocked copper and is routed again alone, top and L3, along a corridor through its pads
+(the shortest legal top path between pieces, else L3, else a straight line). Kept only if it wins on routing score.
+
+| Board, net | Before | Along the corridor |
+|---|---|---|
+| shift127 `/Bridge/SB` | 34 mm, 2 vias | squeezed between Q202.2 and R212.2 |
+| 7bccb83 `/Bridge/SA` | 47 mm, 5 vias | 3.4 mm beside high-impedance copper |
+| aligned `/Bridge/SB` | 35 mm, 2 vias | 35 mm, 2 vias, score 1524 against 1522 |
+
+The router follows the corridor but knows nothing of our squeeze and keep-away rules. On shift127 SB's L3 join is already
+straight (9 mm); the extra 15 mm is its top track round U2.5/R207/R208. Keep the retry (about 15 s per long net), or drop it?
+
+## Also
+- 2h prints the nets it copied (`copied: /Neck/DRVA -> /Bridge/DRVA, ...`) beside those left for routing.
+- `score.py --classes` refuses a `.kicad_pro`.
+- Ask 3 (PB/REF growth on e68324c) is not looked at yet.
+
+### `check --final` from setup, v0.24.2
+| Board | Result |
+|---|---|
+| e68324c | pass (V- joined by the hop) |
+| 83962f0 | pass |
+| shift127 | `/Bridge/SB` too long |
+| 7bccb83 | `/Bridge/SA` too long |
+| aligned | `/Bridge/SB` too long, one unjustified SB via |
+
+---
+
 # route6: reviewer feedback (24 Nov 2026, fourth): tie rule, U3C--, a correction
 
 - **Tie rule.** Routing scores within 1 mm of the net's own weight of the lowest are a tie; of those, fewest vias, then

@@ -19,32 +19,53 @@ def _uf(n):
 def is_tp(pad): return pad['ref'].startswith('TP')
 def label(pad): return f"{pad['ref']}.{pad['num']}"
 
+FILL = 'fill'
+def zone_fill(B, z, layer):
+    """The pieces of a supply zone's fill on one layer: its outline less every other net's copper with clearance, less any part
+    narrower than the zone's minimum width (KiCad drops it). The pieces join each other only through the net's own copper."""
+    key = ('fill', id(z), layer)                                                   # kept with the board's copper, so any edit clears it
+    if key not in B._copper:
+        outline = Polygon(z['pts']); half = z['min_thickness'] / 2
+        cut = unary_union([g.buffer(max(z['clearance'], bd.clearance(z['net'], n))) for n, g, k, o in B.copper(layer) if n != z['net'] and g.distance(outline) < 1.0])
+        fill = outline.difference(cut).buffer(-half).buffer(half)
+        B._copper[key] = [g for g in getattr(fill, 'geoms', [fill]) if not g.is_empty]
+    return B._copper[key]
+
+def zone_copper(B, net, layer):
+    """The net's zone copper on one layer as separate pieces. A ground pour is taken whole: it covers the board, is cut everywhere
+    by design and is stitched between layers, so its pieces are not judged."""
+    zs = [z for z in B.zones if z['net'] == net and layer in z['layers'] and len(z['pts']) > 2]
+    return [Polygon(z['pts']) for z in zs] if net in bd.GROUND else [g for z in zs for g in zone_fill(B, z, layer)]
+
 def pad_groups(B, net, without=()):
-    """The net's pads as lists of pads joined by copper, leaving out the tracks and vias whose uuids are in `without`.
-    A net with a zone counts everything on that zone's layers that lies on the zone (vias, through-hole pads, pads in the pour) as joined."""
-    zoned = {}
-    for z in B.zones:
-        if z['net'] == net and len(z['pts']) > 2:
-            for l in z['layers']: zoned.setdefault(l, []).append(Polygon(z['pts']))
-    items = []                                                     # (layerset, geom, pad or None)
+    """The net's pads as lists of pads joined by copper, leaving out the tracks and vias whose uuids are in `without`"""
+    return [pads for pads, vias in copper_groups(B, net, without)]
+
+def copper_groups(B, net, without=()):
+    """The net's pads and vias as (pads, vias) for each group joined by copper that holds a pad, leaving out the tracks and vias whose
+    uuids are in `without`. Each piece of a supply zone's fill joins the copper it touches: KiCad joined a via whose centre lay 0.15 mm
+    outside the zone (83962f0's C307.1, FEEDBACK_23NOV), so a via joins where its ring reaches the fill. A net's ground pours all count as one."""
+    items = []                                                     # (layerset, geom, pad, via, None for a track, or FILL)
     for p in B.pads:
         if p['net'] == net and p['layers']: items.append((p['layers'], B.pad_geom(p), p))
     for s in B.segs:
         if s['net'] == net and s['uuid'] not in without: items.append(({s['layer']}, B.seg_geom(s), None))
     for v in B.vias:
-        if v['net'] == net and v['uuid'] not in without: items.append((set(bd.LAYERS6), B.via_geom(v), None))
+        if v['net'] == net and v['uuid'] not in without: items.append((set(bd.LAYERS6), B.via_geom(v), v))
     if not items: return []
+    items += [({l}, g, FILL) for l in B.copper_layers for g in zone_copper(B, net, l)]
     par, f = _uf(len(items)); tree = STRtree([g for _, g, _ in items])
-    for i, (L, g, _) in enumerate(items):
+    for i, (L, g, p) in enumerate(items):
         for j in tree.query(g, predicate='intersects'):
-            j = int(j)
-            if j > i and L & items[j][0]: par[f(i)] = f(j)
-    pl = [i for i, (L, g, p) in enumerate(items) if not (p and p['zone_none']) and any(g.intersects(z) for l in L for z in zoned.get(l, ()))]
-    for i in pl[1:]: par[f(i)] = f(pl[0])
+            j = int(j); q = items[j][2]
+            if j > i and L & items[j][0] and not (q is FILL and p not in (None, FILL) and p.get('zone_none')): par[f(i)] = f(j)
+    if net in bd.GROUND:
+        pl = [i for i, (L, g, p) in enumerate(items) if p is FILL]
+        for i in pl[1:]: par[f(i)] = f(pl[0])
     groups = {}
     for i, (L, g, p) in enumerate(items):
-        if p: groups.setdefault(f(i), []).append(p)
-    return list(groups.values())
+        if p not in (None, FILL): groups.setdefault(f(i), ([], []))['uuid' in p].append(p)
+    return [g for g in groups.values() if g[0]]
 
 def unconnected(B, nets=None):
     """nets whose pads are not all joined by copper, each with its pieces except the largest"""
@@ -123,7 +144,7 @@ def via_layers(B, v):
     out = {s['layer'] for s in B.segs if s['net'] == v['net'] and near(s['x1'], s['y1'], math.dist((s['x1'], s['y1']), (s['x2'], s['y2'])) + s['w'])
            and g.intersects(B.seg_geom(s)) and not (near(s['x1'], s['y1'], 0) and near(s['x2'], s['y2'], 0))}
     out |= {l for p in B.pads if p['net'] == v['net'] and near(p['x'], p['y'], max(p['w'], p['h'])) and g.intersects(B.pad_geom(p)) for l in p['layers']}
-    return out | {l for z in B.zones if z['net'] == v['net'] and len(z['pts']) > 2 and Polygon(z['pts']).intersects(g) for l in z['layers']}
+    return out | {l for l in B.copper_layers if any(g.intersects(z) for z in zone_copper(B, v['net'], l))}
 
 def ends_in(B, v):
     """The ends of its net's tracks whose round end reaches the via and that lie outside its pads, as {(layer, x, y): width}: without
@@ -147,7 +168,7 @@ def dangling_tracks(B, nets=None):
     for s in B.segs:
         if nets is not None and s['net'] not in nets: continue
         mine = [g for n, g, k, o in B.copper(s['layer']) if n == s['net'] and o is not s]
-        mine += [Polygon(z['pts']) for z in B.zones if z['net'] == s['net'] and s['layer'] in z['layers'] and len(z['pts']) > 2]
+        mine += zone_copper(B, s['net'], s['layer'])
         loose = any(not any(g.distance(Point(x, y)) < 1e-3 for g in mine) for x, y in ((s['x1'], s['y1']), (s['x2'], s['y2'])))
         if loose and len(pad_groups(B, s['net'], {s['uuid']})) == len(pad_groups(B, s['net'])): out.append(s)
     return out
@@ -180,12 +201,9 @@ def zone_integrity(B):
     out = []
     for z in B.zones:
         if not z['net'] or z['net'] in bd.GROUND or len(z['pts']) < 3: continue
-        outline = Polygon(z['pts']); half = z['min_thickness'] / 2
+        outline = Polygon(z['pts'])
         for layer in z['layers']:
-            cut = unary_union([g.buffer(max(z['clearance'], bd.clearance(z['net'], n))) for n, g, k, o in B.copper(layer) if n != z['net'] and g.distance(outline) < 1.0])
-            fill = outline.difference(cut).buffer(-half).buffer(half)                # KiCad drops fill narrower than the zone's minimum width
-            own = [g for n, g, k, o in B.copper(layer) if n == z['net'] and k == 'seg']   # KiCad joins fill pieces through the net's own tracks
-            if own: fill = unary_union([fill] + [g for g in own if g.intersects(outline)])
+            fill = unary_union(zone_fill(B, z, layer) + [g for n, g, k, o in B.copper(layer) if n == z['net'] and k == 'seg' and g.intersects(outline)])   # KiCad joins fill pieces through the net's own tracks
             pieces = [g for g in getattr(fill, 'geoms', [fill]) if not g.is_empty]
             mine = [v for v in B.vias if v['net'] == z['net'] and outline.contains(Point(v['x'], v['y']))]
             home = [next((i for i, g in enumerate(pieces) if g.intersects(B.via_geom(v))), None) for v in mine]
@@ -195,6 +213,11 @@ def zone_integrity(B):
                 main = max((h for h in groups if h is not None), key=lambda h: len(groups[h]), default=None)
                 out.append(dict(zone=z['name'], net=z['net'], layer=layer, pieces=len(pieces), cut_off=sorted((vs for h, vs in groups.items() if h != main or h is None), key=len)))
     return out
+
+def supply_split(B):
+    """Supply nets with a zone whose pads are not all joined: a net drawn as several zones is whole only where copper joins them"""
+    zoned = sorted({z['net'] for z in B.zones if z['net'] and z['net'] not in bd.GROUND and len(z['pts']) > 2})
+    return unconnected(B, zoned) if zoned else []
 
 def symmetry(B, cx=None, shift=None, tol=0.02):
     """every X1nn part must have its X2nn twin either mirrored about the board centre or shifted by `shift` mm"""
@@ -218,7 +241,7 @@ def report(B, justify=True, timing=None, classes=None):
     def run(key, fn):
         t0 = time.perf_counter(); R[key] = fn()
         if timing is not None: timing[key] = round(time.perf_counter() - t0, 3)
-    for key, fn in (('unconnected', unconnected), ('clearance', clearances), ('holes', holes), ('edge', edge), ('hz', hz_rule), ('no_via_pads', no_via_pads), ('zone_integrity', zone_integrity), ('symmetry', symmetry)):
+    for key, fn in (('unconnected', unconnected), ('clearance', clearances), ('holes', holes), ('edge', edge), ('hz', hz_rule), ('no_via_pads', no_via_pads), ('zone_integrity', zone_integrity), ('supply_split', supply_split), ('symmetry', symmetry)):
         run(key, lambda fn=fn: fn(B))
     run('dangling_vias', lambda: [dict(net=v['net'], at=[round(v['x'], 2), round(v['y'], 2)]) for v in dangling_vias(B)])
     run('dangling_tracks', lambda: [dict(net=s['net'], layer=s['layer'], at=[round(s['x1'], 2), round(s['y1'], 2), round(s['x2'], 2), round(s['y2'], 2)]) for s in dangling_tracks(B)])
@@ -231,7 +254,7 @@ def report(B, justify=True, timing=None, classes=None):
     R['stats'] = dict(tracks=len(B.segs), vias=len(B.vias),
                       length={l: round(sum(math.dist((s['x1'], s['y1']), (s['x2'], s['y2'])) for s in B.segs if s['layer'] == l), 1) for l in B.copper_layers})
     return R
-FAIL = ('clearance', 'holes', 'edge', 'hz', 'no_via_pads', 'zone_integrity', 'krt_drc')   # must be empty at every stage; krt_drc is stage_route's second opinion
+FAIL = ('clearance', 'holes', 'edge', 'hz', 'no_via_pads', 'zone_integrity', 'supply_split', 'krt_drc', 'krt_weird')   # must be empty at every stage; krt_drc and krt_weird are stage_route's second opinion
 FINAL = ('unconnected', 'unjustified_vias', 'dangling_vias', 'dangling_tracks', 'too_long')   # too_long is stage_route's; must be empty at the end; symmetry is always informational (some differences are deliberate)
 def must_fix(R, final=False): return {k: len(R[k]) for k in FAIL + (FINAL if final else ()) if R.get(k)}
 

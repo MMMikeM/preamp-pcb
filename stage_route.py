@@ -18,7 +18,7 @@ its class's step. 2i routes what the copy did not cover.
 With ROUTER_DIR set, every step also gets a second opinion from the router's own DRC and connectivity check (krt_checks.py).
 2g (tidy) is manual review for now. WORK defaults to ./work/board.kicad_pcb; every step keeps work/<step>.kicad_pcb as well.
 The router is KiCadRoutingTools (not included): set ROUTER_DIR to its checkout. Steps 2b, 2c, 2h, check and setup do not need it."""
-import sys, os, subprocess, shutil, argparse, json, math, time, re, contextlib, fnmatch, heapq, itertools, signal
+import sys, os, subprocess, shutil, argparse, json, math, time, re, contextlib, fnmatch, heapq, itertools, signal, collections, uuid
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import board as bd, toplink as tl, checks, krt_checks, mirror_route, drops, via_justify, hand_access, score
 from shapely.geometry import LineString, Point, Polygon, box
@@ -93,17 +93,16 @@ def split_supply(layer='In4.Cu'):
     A.add(zones); A.save(BOARD); count('supply zones', len(zones))
 HOP_WIDTH = 0.4
 def hop_to_zone(layer='In2.Cu'):
-    """Rule 6's L3 hop. A rail pad whose via the zone does not reach (its L5 stub would have to cross the other rail's zone) is joined by
-    one track on L3, with no new via, from that via to the nearest via of its own net that the zone does reach."""
+    """Rule 6's L3 hop. A piece of a rail its zone leaves apart from the rest (a pad whose via the zone misses, or a zone piece the
+    other rail's zone cuts off) is joined by one track on L3, with no new via, from one of its vias to the nearest via of the rest."""
     B = bd.Board(BOARD); hops = []
     for net in sorted(bd.RAILS):
-        zones = [Polygon(z['pts']) for z in B.zones if z['net'] == net and len(z['pts']) > 2]
-        landed = [v for v in B.vias if v['net'] == net and any(z.intersects(B.via_geom(v)) for z in zones)]
-        for g in checks.pad_groups(B, net):
-            mine = [v for v in B.vias if v['net'] == net and any(B.pad_geom(p).intersects(B.via_geom(v)) for p in g)]
-            if not mine or any(v in landed for v in mine): continue
+        groups = sorted(checks.copper_groups(B, net), key=lambda g: len(g[0]) + len(g[1]))
+        rest = groups[-1][1] if groups else []
+        for g, mine in groups[:-1]:
+            if not mine: continue
             comps = tl.components(B, net, layer); src = next(c for c in comps if any(v in mine for v in c['vias']))
-            homes = sorted((tl.gap(src, c)[0], i) for i, c in enumerate(comps) if any(v in landed for v in c['vias']))
+            homes = sorted((tl.gap(src, c)[0], i) for i, c in enumerate(comps) if any(v in rest for v in c['vias']))
             found = next((r for _, i in homes[:5] for r in [tl.top_path(B, net, src, comps[i], HOP_WIDTH, layer=layer)] if r), None)
             label = '+'.join(checks.label(p) for p in g)
             if not found: print(f'  {net} {label}: no L3 hop to its zone'); continue
@@ -182,8 +181,10 @@ def finish(step, commit, final=False, failed=None):
         # reaches; a zoned net whose every pad reaches its zone through copper here is left to KiCad's DRC
         ours = {u['net'] for u in R['unconnected']}; zoned = {z['net'] for z in B.zones}; theirs = [n for n in R.pop('krt_unconnected') if n not in ours]
         R['krt_unconnected_extra'] = [n for n in theirs if n not in zoned]; R['krt_zone_fill_only'] = [n for n in theirs if n in zoned]
+        weird = collections.Counter(x['category'] for x in R['krt_weird'] + R['krt_weird_warnings'])
         print(f"  second opinion: {len(R['krt_drc'])} DRC items | nets only it calls unconnected: {R['krt_unconnected_extra'] or 'none'}"
-              + (f" (and {R['krt_zone_fill_only']}, by its estimate of the pour only)" if R['krt_zone_fill_only'] else ''))
+              + (f" (and {R['krt_zone_fill_only']}, by its estimate of the pour only)" if R['krt_zone_fill_only'] else '')
+              + f" | weird copper: {dict(weird) or 'none'}")
     else: print('  second opinion skipped: ROUTER_DIR is not set')
     json.dump(R, open(saved[1], 'w'), indent=1)
     bad = checks.must_fix(R, final)
@@ -419,6 +420,7 @@ def route_signals(nets, step='2e'):
     drop_dangling(nets, step)                                                 # first, so a stub left over does not change which vias the check flags
     top_again(nets, step)
     clear_the_way(nets, step)
+    follow_guide(nets, step)
     drop_dangling(nets, step)
     cl = net_classes() if os.path.exists(os.path.join(WORK, 'net_classes.json')) else {}
     B = bd.Board(BOARD); still_open = [n for n in nets if checks.top_incomplete(B, n)]; long = {n: w for n in nets if n not in still_open for w in [too_long_to_pass(B, n, cl)] if w[0]}
@@ -426,6 +428,43 @@ def route_signals(nets, step='2e'):
     for n, (_, L, t) in long.items(): print(f'  {n}: {L:.0f} mm for a {t:.0f} mm tree, over the limit for a net off the top layer; check --final reports it')
     count(f'{step} nets left open', len(still_open)); count(f'{step} nets left too long', len(long)); return still_open, sorted(long)
 
+GUIDE_LAYER = 'User.1'; GUIDE_STEP = 1.0; GUIDE_WIDTH = 0.2
+def guide_lines(B, net):
+    """The corridor for one net, as gr_line text on GUIDE_LAYER: between its pieces in shortest-tree order, the shortest legal way on top,
+    else on L3, else the straight line between their nearest points, which the router follows only where it can"""
+    comps = tl.components(B, net); inn = [0]; out = []
+    while len(inn) < len(comps):
+        d, i, j = min((tl.gap(comps[i], comps[j])[0], i, j) for i in inn for j in range(len(comps)) if j not in inn); inn.append(j)
+        _, a, b = tl.gap(comps[i], comps[j])
+        found = next((r for layer in ('F.Cu', 'In2.Cu') for r in [tl.top_path(B, net, comps[i], comps[j], GUIDE_WIDTH, layer=layer)] if r), None)
+        pts = found[1] if found else [a[:2], b[:2]]
+        out += [f'\t(gr_line (start {x1:.4f} {y1:.4f}) (end {x2:.4f} {y2:.4f}) (stroke (width 0.1) (type solid)) (layer "{GUIDE_LAYER}") (uuid "{uuid.uuid4()}"))\n'
+                for (x1, y1), (x2, y2) in zip(pts, pts[1:])]
+    return out
+def follow_guide(nets, step):
+    """A P1-P3 net joined but over its limit took a detour the router had no reason to avoid, on top or on L3. All its copper but what is
+    locked is taken out and it is routed again alone, top and L3, following a corridor between its pads (guide_lines, the router's
+    --guide-corridor). The corridor is best-effort: a waypoint the router cannot reach is dropped. The result is kept if it is joined, is
+    not squeezed or beside high-impedance copper, and wins on routing score as clear_the_way's lifts do (best_routing)."""
+    cl = net_classes() if os.path.exists(os.path.join(WORK, 'net_classes.json')) else {}
+    for n in nets:
+        B = bd.Board(BOARD)
+        if rank(n, cl) > 3 or checks.top_incomplete(B, n) or not too_long_to_pass(B, n, cl)[0]: continue
+        before = score.routing_total(BOARD, cl); was = checks.length_and_tree(B, n)[0], sum(v['net'] == n for v in B.vias)
+        shutil.copy(BOARD, BOARD + '.guide'); start = copper_ids(B)
+        B.remove([x['uuid'] for x in B.segs + B.vias if x['net'] == n and not x['locked']])
+        lines = guide_lines(B, n); B.add(lines); B.save(BOARD)
+        try: router([n], ['F.Cu', 'In2.Cu'], TOP_AND_L3 + ['--guide-corridor', '--guide-corridor-layer', GUIDE_LAYER, '--guide-corridor-spacing', str(GUIDE_STEP)])
+        except StepFailed as e: why = f'the router failed ({e})'
+        else:
+            B = bd.Board(BOARD); B.text = re.sub(r'\t\(gr_line [^\n]*\(layer "%s"\)[^\n]*\n' % re.escape(GUIDE_LAYER), '', B.text); B._parse(); B.save(BOARD)
+            why = 'not joined' if checks.top_incomplete(B, n) else (lambda c: c and c[1])(crowded(B, n, start))
+        got = None if why else score.routing_total(BOARD, cl); C = bd.Board(BOARD)
+        best = None if why else best_routing([(before, BOARD + '.guide', False), (got, BOARD, True)], SCORE_TIE_MM * score.net_weight(n, cl))
+        if not (best and best[2]): shutil.copy(BOARD + '.guide', BOARD)
+        os.remove(BOARD + '.guide'); count(f'{step} long nets routed again along a corridor'); count(f'{step} corridor routes kept', int(bool(best and best[2])))
+        print(f'  {n} ({was[0]:.0f} mm, {was[1]} vias) along a corridor of {len(lines)} line(s): ' + (f'does not count ({why})' if why else
+              f"{checks.length_and_tree(C, n)[0]:.0f} mm and {sum(v['net'] == n for v in C.vias)} vias, routing score {got:.0f} (was {before:.0f}): {'kept' if best[2] else 'not kept'}"))
 def route_bias(nets):
     # L3 runs east-west, L5 north-south (the router alternates by position in --layers); BIAS_L3_COST trades L3 length against hop vias
     return router(nets, ['In2.Cu', 'In4.Cu'], ['--layer-costs', os.environ.get('BIAS_L3_COST', '2.0'), '1.0', '--via-cost', '40', '--track-width', '0.4',

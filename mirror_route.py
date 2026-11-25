@@ -106,6 +106,7 @@ if __name__ == '__main__':
         sys.exit(0)
     todo, skipped = run(B, a.src, a.dry_run)
     print(len(todo), 'nets copied:', {m: sum(t['mode'] == m for t in todo) for m in ('mirror', 'copy')})
+    if todo: print('  copied:', ', '.join(f"{t['net']} -> {t['twin']}" for t in todo))
     for s in skipped:
         if 'already_routed_as' in s: print('  already routed on the other channel:', s['net'], 'as', ', '.join(s['already_routed_as']))
         else: print('  left for individual routing:', s['net'], '-', s['why'])
