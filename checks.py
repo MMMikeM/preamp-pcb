@@ -184,6 +184,8 @@ def zone_integrity(B):
         for layer in z['layers']:
             cut = unary_union([g.buffer(max(z['clearance'], bd.clearance(z['net'], n))) for n, g, k, o in B.copper(layer) if n != z['net'] and g.distance(outline) < 1.0])
             fill = outline.difference(cut).buffer(-half).buffer(half)                # KiCad drops fill narrower than the zone's minimum width
+            own = [g for n, g, k, o in B.copper(layer) if n == z['net'] and k == 'seg']   # KiCad joins fill pieces through the net's own tracks
+            if own: fill = unary_union([fill] + [g for g in own if g.intersects(outline)])
             pieces = [g for g in getattr(fill, 'geoms', [fill]) if not g.is_empty]
             mine = [v for v in B.vias if v['net'] == z['net'] and outline.contains(Point(v['x'], v['y']))]
             home = [next((i for i, g in enumerate(pieces) if g.intersects(B.via_geom(v))), None) for v in mine]
